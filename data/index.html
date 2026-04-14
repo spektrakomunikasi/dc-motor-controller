@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DC Motor Controller</title>
+<style>
+  :root {
+    --bg: #0f0f0f;
+    --card: #1a1a1a;
+    --border: #2a2a2a;
+    --accent: #00c8ff;
+    --green: #00e676;
+    --red: #ff1744;
+    --yellow: #ffea00;
+    --text: #e0e0e0;
+    --muted: #888;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+  header { background: var(--card); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 1.1rem; letter-spacing: 1px; color: var(--accent); }
+  .badge { font-size: 0.75rem; padding: 3px 10px; border-radius: 20px; font-weight: 600; }
+  .badge-green  { background: #00e67622; color: var(--green); border: 1px solid var(--green); }
+  .badge-red    { background: #ff174422; color: var(--red);   border: 1px solid var(--red); }
+  .badge-yellow { background: #ffea0022; color: var(--yellow);border: 1px solid var(--yellow); }
+  .badge-blue   { background: #00c8ff22; color: var(--accent);border: 1px solid var(--accent); }
+  main { max-width: 640px; margin: 0 auto; padding: 20px 16px; display: grid; gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+  .card-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; }
+  .big-value { font-size: 2.4rem; font-weight: 700; color: var(--accent); line-height: 1; }
+  .big-unit  { font-size: 1rem; color: var(--muted); margin-left: 4px; }
+  .gauge-wrap { position: relative; margin: 8px 0; }
+  .gauge-bar { height: 10px; border-radius: 5px; background: var(--border); overflow: hidden; }
+  .gauge-fill { height: 100%; border-radius: 5px; background: linear-gradient(90deg, var(--green), var(--yellow), var(--red)); transition: width .3s; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .info-item { flex: 1; min-width: 120px; background: #111; border-radius: 8px; padding: 10px 12px; }
+  .info-label { font-size: 0.7rem; color: var(--muted); margin-bottom: 4px; }
+  .info-value { font-size: 0.95rem; font-weight: 600; }
+  .btn { border: none; border-radius: 8px; padding: 12px 24px; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: opacity .15s, transform .1s; }
+  .btn:active { transform: scale(.96); }
+  .btn-green  { background: var(--green);  color: #000; }
+  .btn-red    { background: var(--red);    color: #fff; }
+  .btn-yellow { background: var(--yellow); color: #000; }
+  .btn-blue   { background: var(--accent); color: #000; }
+  .btn:disabled { opacity: .35; cursor: not-allowed; }
+  .slider-wrap { margin-top: 6px; }
+  .slider-wrap label { font-size: 0.8rem; color: var(--muted); display: flex; justify-content: space-between; margin-bottom: 6px; }
+  input[type=range] { width: 100%; -webkit-appearance: none; appearance: none; height: 6px; border-radius: 3px; background: var(--border); outline: none; cursor: pointer; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); }
+  .graph-wrap { overflow: hidden; border-radius: 6px; }
+  canvas { display: block; width: 100%; }
+  .wifi-info { font-size: 0.8rem; color: var(--muted); }
+  .wifi-info span { color: var(--text); }
+  .setup-link { font-size: 0.8rem; color: var(--accent); text-decoration: none; }
+  .setup-link:hover { text-decoration: underline; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #222; border: 1px solid var(--border); border-radius: 8px; padding: 10px 20px; font-size: 0.85rem; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 100; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚙ DC Motor Controller</h1>
+  <span id="motorBadge" class="badge badge-red">STOPPED</span>
+</header>
+
+<main>
+  <!-- Current Gauge -->
+  <div class="card">
+    <div class="card-title">Live Current</div>
+    <div style="display:flex;align-items:baseline;gap:4px">
+      <span class="big-value" id="currentVal">0.00</span>
+      <span class="big-unit">A</span>
+      <span style="margin-left:auto;font-size:0.8rem;color:var(--muted)">Limit: <span id="limitDisplay" style="color:var(--text)">--</span> A</span>
+    </div>
+    <div class="gauge-wrap">
+      <div class="gauge-bar"><div class="gauge-fill" id="gaugeFill" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <!-- Motor Controls -->
+  <div class="card">
+    <div class="card-title">Motor Control</div>
+    <div class="row" style="gap:10px">
+      <button class="btn btn-green" id="btnStart" onclick="motorCmd('start')">▶ Start</button>
+      <button class="btn btn-red"   id="btnStop"  onclick="motorCmd('stop')">■ Stop</button>
+      <button class="btn btn-yellow"id="btnReset" onclick="motorCmd('reset')">↺ Reset</button>
+    </div>
+    <div class="row" style="margin-top:12px;gap:8px">
+      <div class="info-item"><div class="info-label">Relay 1 (Cutoff)</div><div class="info-value" id="relay1">OFF</div></div>
+      <div class="info-item"><div class="info-label">Relay 2 (Bypass)</div><div class="info-value" id="relay2">OFF</div></div>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="card">
+    <div class="card-title">Settings</div>
+    <div class="slider-wrap">
+      <label>Current Limit <span id="curLimitVal">15.0</span> A</label>
+      <input type="range" id="curLimitSlider" min="1" max="30" step="0.5" value="15" oninput="updateSliderLabel('curLimitVal',this.value,'')">
+    </div>
+    <div class="slider-wrap" style="margin-top:14px">
+      <label>Soft-Start Duration <span id="softStartVal">3.0</span> s</label>
+      <input type="range" id="softStartSlider" min="1" max="10" step="0.5" value="3" oninput="updateSliderLabel('softStartVal',this.value,'')">
+    </div>
+    <button class="btn btn-blue" style="margin-top:14px;width:100%" onclick="saveSettings()">💾 Save Settings</button>
+  </div>
+
+  <!-- Current History Graph -->
+  <div class="card">
+    <div class="card-title">Current History (60 s)</div>
+    <div class="graph-wrap">
+      <canvas id="graph" height="80"></canvas>
+    </div>
+  </div>
+
+  <!-- WiFi Info -->
+  <div class="card">
+    <div class="card-title">Network</div>
+    <div class="wifi-info">
+      <div>WiFi: <span id="wifiState">--</span></div>
+      <div>SSID: <span id="wifiSSID">--</span></div>
+      <div>IP: <span id="wifiIP">--</span></div>
+      <div>RSSI: <span id="wifiRSSI">--</span> dBm</div>
+    </div>
+    <a href="/setup.html" class="setup-link" style="display:block;margin-top:10px">⚙ WiFi Setup</a>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const HISTORY_LEN = 120; // 2 readings/s × 60 s
+let history = new Array(HISTORY_LEN).fill(0);
+let limitAmps = 15;
+
+async function fetchStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    updateUI(d);
+  } catch(e) {}
+}
+
+function updateUI(d) {
+  const cur = parseFloat(d.current_a) || 0;
+  limitAmps = parseFloat(d.current_limit) || 15;
+
+  document.getElementById('currentVal').textContent = cur.toFixed(2);
+  document.getElementById('limitDisplay').textContent = limitAmps.toFixed(1);
+
+  const pct = Math.min((cur / limitAmps) * 100, 100);
+  document.getElementById('gaugeFill').style.width = pct + '%';
+
+  // Motor state badge
+  const badge = document.getElementById('motorBadge');
+  const state = d.motor_state || 'STOPPED';
+  badge.textContent = state;
+  badge.className = 'badge ' + (
+    state === 'RUNNING'     ? 'badge-green'  :
+    state === 'SOFT_START'  ? 'badge-blue'   :
+    state === 'OVERCURRENT' ? 'badge-red'    :
+    state === 'FAULT'       ? 'badge-red'    : 'badge-red'
+  );
+
+  document.getElementById('relay1').textContent = d.relay1 ? '● ON' : '○ OFF';
+  document.getElementById('relay1').style.color = d.relay1 ? 'var(--green)' : 'var(--muted)';
+  document.getElementById('relay2').textContent = d.relay2 ? '● ON' : '○ OFF';
+  document.getElementById('relay2').style.color = d.relay2 ? 'var(--green)' : 'var(--muted)';
+
+  document.getElementById('wifiState').textContent = d.wifi_state || '--';
+  document.getElementById('wifiSSID').textContent  = d.wifi_ssid  || '--';
+  document.getElementById('wifiIP').textContent    = d.wifi_ip    || '--';
+  document.getElementById('wifiRSSI').textContent  = d.wifi_rssi  || '--';
+
+  // Sync sliders if not being dragged
+  if (!document.getElementById('curLimitSlider').matches(':active')) {
+    document.getElementById('curLimitSlider').value = limitAmps;
+    document.getElementById('curLimitVal').textContent = limitAmps.toFixed(1);
+  }
+  const ss = (d.soft_start_ms / 1000) || 3;
+  if (!document.getElementById('softStartSlider').matches(':active')) {
+    document.getElementById('softStartSlider').value = ss;
+    document.getElementById('softStartVal').textContent = ss.toFixed(1);
+  }
+
+  // Graph
+  history.push(cur);
+  if (history.length > HISTORY_LEN) history.shift();
+  drawGraph();
+}
+
+function drawGraph() {
+  const canvas = document.getElementById('graph');
+  const ctx    = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 600;
+  const H = 80;
+  canvas.width  = W;
+  canvas.height = H;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+
+  const max = Math.max(limitAmps, ...history, 1);
+  const step = W / (HISTORY_LEN - 1);
+
+  // Limit line
+  const limY = H - (limitAmps / max) * H;
+  ctx.strokeStyle = '#ff174466';
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(0, limY); ctx.lineTo(W, limY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Current line
+  ctx.strokeStyle = '#00c8ff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  history.forEach((v, i) => {
+    const x = i * step;
+    const y = H - (v / max) * H;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
+
+async function motorCmd(cmd) {
+  try {
+    await fetch('/api/motor/' + cmd, {method:'POST'});
+    showToast(cmd.toUpperCase() + ' command sent');
+    setTimeout(fetchStatus, 200);
+  } catch(e) { showToast('Error: ' + e); }
+}
+
+async function saveSettings() {
+  const limit = parseFloat(document.getElementById('curLimitSlider').value);
+  const ss    = parseFloat(document.getElementById('softStartSlider').value) * 1000;
+  try {
+    await fetch('/api/motor/settings', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({current_limit: limit, soft_start_ms: ss})
+    });
+    showToast('Settings saved ✓');
+  } catch(e) { showToast('Save failed'); }
+}
+
+function updateSliderLabel(id, val, suffix) {
+  document.getElementById(id).textContent = parseFloat(val).toFixed(1) + suffix;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+fetchStatus();
+setInterval(fetchStatus, 500);
+</script>
+</body>
+</html>
