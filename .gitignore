@@ -1,0 +1,22 @@
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# IDE settings (keep VS Code settings if desired)
+.vscode/
+*.code-workspace
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Temp files
+*.tmp
+*.bak
+
+# Arduino secrets (if split out)
+secrets.h
