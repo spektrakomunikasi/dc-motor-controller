@@ -1,4 +1,4 @@
-Import("env")
+Import("env")  # noqa: F821 – PlatformIO SCons API (not standard Python import)
 
 # pre_build.py – placeholder pre-build script
 # Extend here if you need to auto-generate version headers,

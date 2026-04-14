@@ -67,9 +67,6 @@
 #define OLED_WIDTH          128
 #define OLED_HEIGHT         64
 
-// Display update interval in milliseconds
-#define DISPLAY_UPDATE_MS   500
-
 // -----------------------------------------------------------------------------
 // ACS712-30A Sensor Calibration
 // -----------------------------------------------------------------------------
