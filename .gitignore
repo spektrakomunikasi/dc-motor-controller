@@ -1,0 +1,14 @@
+# Build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# WiFi credentials — do NOT commit
+src/credentials.h
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

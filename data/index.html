@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DC Motor Controller</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface2: #334155;
+    --accent: #38bdf8;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --text: #f1f5f9;
+    --text-muted: #94a3b8;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 16px;
+  }
+  h1 { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
+  .subtitle { color: var(--text-muted); font-size: 0.8rem; margin-top: 2px; }
+  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  .badge {
+    padding: 4px 12px; border-radius: 999px; font-size: 0.75rem; font-weight: 600;
+    background: var(--surface2); color: var(--text-muted);
+  }
+  .badge.ok { background: #14532d; color: var(--green); }
+  .badge.err { background: #7f1d1d; color: var(--red); }
+
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+
+  .card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 18px;
+    border: 1px solid var(--surface2);
+  }
+  .card-title {
+    font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 14px;
+  }
+
+  /* Gauge */
+  .gauge-wrap { display: flex; flex-direction: column; align-items: center; }
+  .gauge-svg { width: 180px; height: 110px; }
+  .gauge-val { font-size: 2.2rem; font-weight: 700; margin-top: 4px; }
+  .gauge-unit { font-size: 0.9rem; color: var(--text-muted); }
+
+  /* State badge */
+  .state-pill {
+    display: inline-block; padding: 6px 18px; border-radius: 999px;
+    font-weight: 700; font-size: 1rem; letter-spacing: 0.04em;
+    margin: 8px 0;
+  }
+  .state-STOPPED    { background:#1e293b; color:#94a3b8; border:2px solid #334155; }
+  .state-RAMP       { background:#1c1917; color:#fbbf24; border:2px solid #78350f; }
+  .state-RUNNING    { background:#14532d; color:#4ade80; border:2px solid #166534; }
+  .state-OVERCURRENT{ background:#7f1d1d; color:#f87171; border:2px solid #991b1b; animation: flash 0.5s infinite; }
+  @keyframes flash { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+  /* Relay indicators */
+  .relay-row { display: flex; gap: 12px; margin-top: 6px; }
+  .relay-ind {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    background: var(--surface2); border-radius: 8px; padding: 10px 6px;
+  }
+  .relay-light {
+    width: 22px; height: 22px; border-radius: 50%;
+    margin-bottom: 6px; transition: background 0.3s, box-shadow 0.3s;
+  }
+  .relay-light.on  { background: var(--green);  box-shadow: 0 0 10px var(--green); }
+  .relay-light.off { background: #374151; }
+  .relay-label { font-size: 0.72rem; color: var(--text-muted); text-align: center; }
+
+  /* Sliders */
+  .slider-row { margin-bottom: 16px; }
+  .slider-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+  .slider-name { font-size: 0.85rem; }
+  .slider-val { font-weight: 700; color: var(--accent); font-size: 1rem; }
+  input[type=range] {
+    width: 100%; accent-color: var(--accent);
+    height: 6px; cursor: pointer;
+  }
+  .slider-limits { display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; }
+
+  /* Progress bar */
+  .progress-wrap { margin-top: 8px; }
+  .progress-bar { width: 100%; height: 10px; background: var(--surface2); border-radius: 999px; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.5s; }
+  .progress-label { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
+
+  /* Buttons */
+  .btn-row { display: flex; gap: 10px; margin-top: 16px; }
+  .btn {
+    flex: 1; padding: 12px; border-radius: 8px; font-size: 0.95rem;
+    font-weight: 600; cursor: pointer; border: none; transition: opacity 0.15s;
+  }
+  .btn:active { opacity: 0.7; }
+  .btn-start { background: var(--green); color: #052e16; }
+  .btn-stop  { background: var(--red);   color: #450a0a; }
+  .btn-restart { background: var(--surface2); color: var(--text); font-size: 0.8rem; flex: 0.5; }
+
+  /* Chart */
+  canvas { width: 100%; display: block; }
+
+  /* Info row */
+  .info-row { display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-muted); margin-top: 10px; }
+  .info-val { color: var(--text); font-weight: 600; }
+
+  .uptime { font-size: 0.75rem; color: var(--text-muted); text-align: right; margin-top: 4px; }
+
+  @media(max-width:480px) {
+    .gauge-svg { width: 150px; height: 92px; }
+    .gauge-val { font-size: 1.8rem; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>⚡ DC Motor Controller</h1>
+    <div class="subtitle">ESP32 &bull; ACS712-30A &bull; Web Dashboard</div>
+  </div>
+  <span id="wifi-badge" class="badge">WiFi ●</span>
+</header>
+
+<div class="grid">
+
+  <!-- Current Gauge -->
+  <div class="card">
+    <div class="card-title">Live Current</div>
+    <div class="gauge-wrap">
+      <svg class="gauge-svg" viewBox="0 0 200 120">
+        <!-- Track arc (half-circle) -->
+        <path id="gauge-track" d="M20,100 A90,90 0 0,1 180,100"
+              fill="none" stroke="#334155" stroke-width="14" stroke-linecap="round"/>
+        <!-- Fill arc -->
+        <path id="gauge-fill"  d="M20,100 A90,90 0 0,1 180,100"
+              fill="none" stroke="#38bdf8" stroke-width="14" stroke-linecap="round"
+              stroke-dasharray="0 283" style="transition:stroke-dasharray 0.5s, stroke 0.4s"/>
+        <!-- Needle -->
+        <line id="needle" x1="100" y1="100" x2="100" y2="18"
+              stroke="#f1f5f9" stroke-width="2.5" stroke-linecap="round"
+              style="transform-origin:100px 100px; transition:transform 0.5s"/>
+        <circle cx="100" cy="100" r="5" fill="#94a3b8"/>
+        <!-- Scale labels -->
+        <text x="12"  y="116" fill="#64748b" font-size="10">0</text>
+        <text x="90"  y="15"  fill="#64748b" font-size="10">15</text>
+        <text x="170" y="116" fill="#64748b" font-size="10">30</text>
+      </svg>
+      <div class="gauge-val" id="current-val">0.00</div>
+      <div class="gauge-unit">Amperes</div>
+    </div>
+  </div>
+
+  <!-- Motor State + Relays -->
+  <div class="card">
+    <div class="card-title">Motor Status</div>
+    <div id="state-pill" class="state-pill state-STOPPED">STOPPED</div>
+
+    <div class="progress-wrap">
+      <div class="progress-bar"><div class="progress-fill" id="ramp-fill" style="width:0%"></div></div>
+      <div class="progress-label">Soft-start progress: <span id="ramp-pct">0</span>%</div>
+    </div>
+
+    <div class="relay-row" style="margin-top:12px;">
+      <div class="relay-ind">
+        <div class="relay-light off" id="r1-light"></div>
+        <div class="relay-label">Relay 1<br>Motor</div>
+      </div>
+      <div class="relay-ind">
+        <div class="relay-light off" id="r2-light"></div>
+        <div class="relay-label">Relay 2<br>Soft-Start</div>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-start" onclick="cmdStart()">▶ START</button>
+      <button class="btn btn-stop"  onclick="cmdStop()">■ STOP</button>
+      <button class="btn btn-restart" onclick="cmdRestart()">↺ Reboot</button>
+    </div>
+
+    <div class="uptime">Uptime: <span id="uptime">0s</span></div>
+  </div>
+
+  <!-- Settings -->
+  <div class="card">
+    <div class="card-title">Settings</div>
+
+    <div class="slider-row">
+      <div class="slider-header">
+        <span class="slider-name">Current Limit</span>
+        <span class="slider-val"><span id="thresh-val">15.0</span> A</span>
+      </div>
+      <input type="range" id="thresh-slider" min="1" max="30" step="0.5" value="15"
+             oninput="onThreshInput(this.value)">
+      <div class="slider-limits"><span>1 A</span><span>30 A</span></div>
+    </div>
+
+    <div class="slider-row">
+      <div class="slider-header">
+        <span class="slider-name">Soft-Start Duration</span>
+        <span class="slider-val"><span id="ss-val">5</span> s</span>
+      </div>
+      <input type="range" id="ss-slider" min="1" max="10" step="1" value="5"
+             oninput="onSsInput(this.value)">
+      <div class="slider-limits"><span>1 s</span><span>10 s</span></div>
+    </div>
+
+    <div class="info-row">
+      <span>Threshold</span>
+      <span class="info-val" id="thresh-info">15.0 A</span>
+    </div>
+    <div class="info-row">
+      <span>Soft-start time</span>
+      <span class="info-val" id="ss-info">5 s</span>
+    </div>
+    <div class="info-row" style="margin-top:6px;">
+      <span>Settings saved to NVS automatically</span>
+    </div>
+  </div>
+
+  <!-- Current History Chart -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <div class="card-title">Current History (last 60 s)</div>
+    <canvas id="chart" height="120"></canvas>
+  </div>
+
+</div>
+
+<script>
+// ============================================================
+// Chart
+// ============================================================
+const HISTORY_LEN = 120; // 60s at 500ms polling
+const chartData = new Array(HISTORY_LEN).fill(0);
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+let limitLine = 15;
+
+function drawChart() {
+  const W = canvas.width  = canvas.offsetWidth;
+  const H = canvas.height = 120;
+  ctx.clearRect(0, 0, W, H);
+
+  const pad = { t: 8, b: 20, l: 34, r: 10 };
+  const iW = W - pad.l - pad.r;
+  const iH = H - pad.t - pad.b;
+  const maxA = 30;
+
+  // Grid
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const y = pad.t + iH - (i / 5) * iH;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+    ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText((i / 5 * maxA).toFixed(0) + 'A', pad.l - 4, y + 4);
+  }
+
+  // Limit line
+  const ly = pad.t + iH - (limitLine / maxA) * iH;
+  ctx.strokeStyle = '#f87171'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(pad.l, ly); ctx.lineTo(W - pad.r, ly); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Data line
+  ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 2;
+  ctx.shadowColor = '#38bdf880'; ctx.shadowBlur = 4;
+  ctx.beginPath();
+  chartData.forEach((v, i) => {
+    const x = pad.l + (i / (HISTORY_LEN - 1)) * iW;
+    const y = pad.t + iH - Math.min(v / maxA, 1) * iH;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // Fill under line
+  ctx.fillStyle = 'rgba(56,189,248,0.07)';
+  ctx.beginPath();
+  chartData.forEach((v, i) => {
+    const x = pad.l + (i / (HISTORY_LEN - 1)) * iW;
+    const y = pad.t + iH - Math.min(v / maxA, 1) * iH;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.lineTo(W - pad.r, pad.t + iH);
+  ctx.lineTo(pad.l, pad.t + iH);
+  ctx.closePath(); ctx.fill();
+
+  // X-axis labels
+  ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  for (let i = 0; i <= 6; i++) {
+    const t = -60 + i * 10;
+    const x = pad.l + (i / 6) * iW;
+    ctx.fillText(t + 's', x, H - 4);
+  }
+}
+
+// ============================================================
+// Gauge helpers
+// ============================================================
+function updateGauge(amps) {
+  const maxA = 30;
+  const pct = Math.min(amps / maxA, 1);
+  const ARC = 283; // half-circle circumference ≈ π * r = π * 90
+
+  const fill = document.getElementById('gauge-fill');
+  fill.setAttribute('stroke-dasharray', `${pct * ARC} ${ARC}`);
+
+  // Color by level
+  const color = amps >= limitLine ? '#f87171' : amps >= limitLine * 0.8 ? '#fbbf24' : '#38bdf8';
+  fill.setAttribute('stroke', color);
+
+  // Needle: -90° (left) to +90° (right) → 180° total span
+  const angle = -90 + pct * 180;
+  document.getElementById('needle').style.transform = `rotate(${angle}deg)`;
+
+  document.getElementById('current-val').textContent = amps.toFixed(2);
+  document.getElementById('current-val').style.color = color;
+}
+
+// ============================================================
+// Status update
+// ============================================================
+function applyStatus(d) {
+  // Gauge + history
+  const amps = parseFloat(d.current) || 0;
+  chartData.push(amps); chartData.shift();
+  limitLine = parseFloat(d.threshold) || 15;
+  updateGauge(amps);
+  drawChart();
+
+  // State pill
+  const pill = document.getElementById('state-pill');
+  const stateMap = { STOPPED:'STOPPED', RAMP:'RAMP UP', RUNNING:'RUNNING', OVERCURRENT:'⚠ OVERCURRENT' };
+  const cssMap   = { STOPPED:'STOPPED', RAMP:'RAMP', RUNNING:'RUNNING', OVERCURRENT:'OVERCURRENT' };
+  const s = d.motor_state || 'STOPPED';
+  pill.textContent = stateMap[s] || s;
+  pill.className = 'state-pill state-' + (cssMap[s] || 'STOPPED');
+
+  // Ramp progress
+  const pct = parseInt(d.soft_start_progress) || 0;
+  document.getElementById('ramp-fill').style.width = pct + '%';
+  document.getElementById('ramp-pct').textContent  = pct;
+
+  // Relay lights
+  document.getElementById('r1-light').className = 'relay-light ' + (d.relay1 ? 'on' : 'off');
+  document.getElementById('r2-light').className = 'relay-light ' + (d.relay2 ? 'on' : 'off');
+
+  // Settings sliders (don't override while user is dragging — only sync on load)
+  if (!_sliderActive) {
+    const t = parseFloat(d.threshold);
+    document.getElementById('thresh-slider').value = t;
+    document.getElementById('thresh-val').textContent = t.toFixed(1);
+    document.getElementById('thresh-info').textContent = t.toFixed(1) + ' A';
+
+    const ss = parseInt(d.soft_start_time);
+    document.getElementById('ss-slider').value = ss;
+    document.getElementById('ss-val').textContent = ss;
+    document.getElementById('ss-info').textContent = ss + ' s';
+  }
+
+  // Uptime
+  const ms = parseInt(d.uptime_ms) || 0;
+  const s2 = Math.floor(ms / 1000);
+  const h = Math.floor(s2 / 3600), m = Math.floor((s2 % 3600) / 60), sec = s2 % 60;
+  document.getElementById('uptime').textContent =
+    (h > 0 ? h + 'h ' : '') + (m > 0 ? m + 'm ' : '') + sec + 's';
+}
+
+// ============================================================
+// API calls
+// ============================================================
+let _sliderActive = false;
+let _threshTimer, _ssTimer;
+
+function onThreshInput(v) {
+  _sliderActive = true;
+  document.getElementById('thresh-val').textContent = parseFloat(v).toFixed(1);
+  clearTimeout(_threshTimer);
+  _threshTimer = setTimeout(() => {
+    postJson('/api/threshold', { value: parseFloat(v) })
+      .then(() => { _sliderActive = false; });
+  }, 600);
+}
+
+function onSsInput(v) {
+  _sliderActive = true;
+  document.getElementById('ss-val').textContent = parseInt(v);
+  clearTimeout(_ssTimer);
+  _ssTimer = setTimeout(() => {
+    postJson('/api/soft-start-time', { value: parseInt(v) })
+      .then(() => { _sliderActive = false; });
+  }, 600);
+}
+
+function cmdStart() {
+  postJson('/api/relay/motor', { state: true });
+}
+function cmdStop() {
+  postJson('/api/relay/motor', { state: false });
+}
+function cmdRestart() {
+  if (confirm('Reboot ESP32?')) {
+    // Show reboot overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'reboot-overlay';
+    overlay.style.cssText = [
+      'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:999',
+      'display:flex;flex-direction:column;align-items:center;justify-content:center',
+      'color:#f1f5f9;font-family:inherit'
+    ].join(';');
+    overlay.innerHTML = '<div style="font-size:1.6rem;margin-bottom:12px">↺ Rebooting…</div>'
+      + '<div id="reboot-msg" style="color:#94a3b8;font-size:0.9rem">Waiting for ESP32…</div>';
+    document.body.appendChild(overlay);
+
+    fetch('/api/restart', { method: 'POST' }).catch(() => {});
+
+    // Poll until device is back online (up to 30 s)
+    let elapsed = 0;
+    const timer = setInterval(async () => {
+      elapsed += 2;
+      document.getElementById('reboot-msg').textContent =
+        'Waiting for ESP32… ' + elapsed + ' s';
+      if (elapsed >= 30) {
+        clearInterval(timer);
+        document.getElementById('reboot-msg').textContent =
+          'Could not reconnect. Reload manually.';
+        return;
+      }
+      try {
+        const r = await fetch('/api/status');
+        if (r.ok) {
+          clearInterval(timer);
+          overlay.remove();
+        }
+      } catch (_) { /* still offline */ }
+    }, 2000);
+  }
+}
+
+function postJson(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }).catch(console.error);
+}
+
+// ============================================================
+// Polling
+// ============================================================
+let _wifiOk = false;
+
+async function poll() {
+  try {
+    const res = await fetch('/api/status');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    applyStatus(d);
+    if (!_wifiOk) {
+      _wifiOk = true;
+      const b = document.getElementById('wifi-badge');
+      b.textContent = '● Connected';
+      b.className = 'badge ok';
+    }
+  } catch (e) {
+    _wifiOk = false;
+    const b = document.getElementById('wifi-badge');
+    b.textContent = '● Offline';
+    b.className = 'badge err';
+  }
+}
+
+// Draw empty chart immediately
+drawChart();
+window.addEventListener('resize', drawChart);
+
+// Start polling
+poll();
+setInterval(poll, 500);
+</script>
+</body>
+</html>
