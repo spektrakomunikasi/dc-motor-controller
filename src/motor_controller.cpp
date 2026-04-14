@@ -159,6 +159,7 @@ void MotorController::_readCurrent() {
     long sum = 0;
     for (int i = 0; i < CURRENT_SAMPLE_COUNT; i++) {
         sum += analogRead(ACS712_PIN);
+        // Brief delay for ADC input capacitor settling between samples
         delayMicroseconds(100);
     }
     int avg = (int)(sum / CURRENT_SAMPLE_COUNT);

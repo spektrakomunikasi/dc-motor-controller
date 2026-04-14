@@ -249,10 +249,6 @@ function escHtml(s) {
 fetchStatus();
 scanNetworks();
 setInterval(fetchStatus, 5000);
-setInterval(() => {
-  // Auto-refresh networks every 10s
-  scanNetworks();
-}, 10000);
 </script>
 </body>
 </html>

@@ -79,7 +79,7 @@ void WiFiManager::clearWiFiCredentials() {
 }
 
 void WiFiManager::scanNetworks() {
-    // Non-blocking scan request
+    // Blocking (synchronous) scan — call only when idle (AP mode update cycle)
     int n = WiFi.scanNetworks(false, false); // sync scan
     _scannedNetworks.clear();
     if (n > 0) {
