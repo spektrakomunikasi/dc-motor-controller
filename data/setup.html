@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WiFi Setup — DC Motor Controller</title>
+<style>
+  :root {
+    --bg: #0f0f0f;
+    --card: #1a1a1a;
+    --border: #2a2a2a;
+    --accent: #00c8ff;
+    --green: #00e676;
+    --red: #ff1744;
+    --yellow: #ffea00;
+    --text: #e0e0e0;
+    --muted: #888;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+  header { background: var(--card); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 1.1rem; color: var(--accent); }
+  .badge { font-size: 0.75rem; padding: 3px 10px; border-radius: 20px; font-weight: 600; }
+  .badge-ap       { background: #ffea0022; color: var(--yellow); border: 1px solid var(--yellow); }
+  .badge-connected{ background: #00e67622; color: var(--green);  border: 1px solid var(--green); }
+  main { max-width: 520px; margin: 0 auto; padding: 20px 16px; display: grid; gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+  .card-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; }
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .info-item { background: #111; border-radius: 8px; padding: 10px 12px; }
+  .info-label { font-size: 0.7rem; color: var(--muted); margin-bottom: 3px; }
+  .info-value { font-size: 0.9rem; font-weight: 600; word-break: break-all; }
+  .net-list { list-style: none; max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .net-list li { padding: 10px 14px; cursor: pointer; font-size: 0.9rem; border-bottom: 1px solid var(--border); transition: background .15s; }
+  .net-list li:last-child { border-bottom: none; }
+  .net-list li:hover { background: #222; }
+  .net-list li.selected { color: var(--accent); }
+  .net-list li.empty { color: var(--muted); cursor: default; }
+  label { font-size: 0.8rem; color: var(--muted); display: block; margin-bottom: 5px; margin-top: 12px; }
+  input[type=text], input[type=password] {
+    width: 100%; background: #111; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; font-size: 0.95rem; color: var(--text); outline: none;
+    transition: border-color .2s;
+  }
+  input:focus { border-color: var(--accent); }
+  .pw-wrap { position: relative; }
+  .pw-toggle { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.9rem; }
+  .btn { border: none; border-radius: 8px; padding: 12px 20px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: opacity .15s, transform .1s; }
+  .btn:active { transform: scale(.96); }
+  .btn-primary { background: var(--accent); color: #000; }
+  .btn-ghost   { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn-danger  { background: var(--red); color: #fff; }
+  .btn:disabled { opacity: .35; cursor: not-allowed; }
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid transparent; border-top-color: currentColor; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; font-size: 1.1rem; z-index: 200; }
+  .overlay.hidden { display: none; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #222; border: 1px solid var(--border); border-radius: 8px; padding: 10px 20px; font-size: 0.85rem; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 100; }
+  .toast.show { opacity: 1; }
+  a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📶 WiFi Setup</h1>
+  <span id="stateBadge" class="badge badge-ap">AP MODE</span>
+</header>
+
+<main>
+  <!-- Status -->
+  <div class="card">
+    <div class="card-title">Device Status</div>
+    <div class="info-grid">
+      <div class="info-item"><div class="info-label">WiFi State</div><div class="info-value" id="wifiState">--</div></div>
+      <div class="info-item"><div class="info-label">IP Address</div><div class="info-value" id="ipAddr">--</div></div>
+      <div class="info-item"><div class="info-label">AP Name</div><div class="info-value" id="apName">--</div></div>
+      <div class="info-item"><div class="info-label">Connected SSID</div><div class="info-value" id="curSSID">--</div></div>
+    </div>
+  </div>
+
+  <!-- Network Scan -->
+  <div class="card">
+    <div class="card-title">Available Networks</div>
+    <ul class="net-list" id="netList">
+      <li class="empty">Scanning...</li>
+    </ul>
+    <button class="btn btn-ghost" style="margin-top:10px;width:100%" id="btnScan" onclick="scanNetworks()">
+      🔍 Refresh Networks
+    </button>
+  </div>
+
+  <!-- Credentials Form -->
+  <div class="card">
+    <div class="card-title">WiFi Credentials</div>
+    <label for="ssidInput">Network Name (SSID)</label>
+    <input type="text" id="ssidInput" placeholder="Enter or select from list above">
+    <label for="pwInput">Password</label>
+    <div class="pw-wrap">
+      <input type="password" id="pwInput" placeholder="WiFi password">
+      <button class="pw-toggle" onclick="togglePw()" title="Show/hide password">👁</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" style="flex:1" id="btnSave" onclick="saveCredentials()">💾 Save &amp; Reboot</button>
+      <button class="btn btn-danger"  onclick="clearCredentials()">🗑 Clear</button>
+    </div>
+  </div>
+
+  <!-- Info -->
+  <div class="card">
+    <div class="card-title">Instructions</div>
+    <ol style="font-size:0.85rem;color:var(--muted);padding-left:18px;line-height:1.8">
+      <li>Select your WiFi network from the list above, or type the SSID manually.</li>
+      <li>Enter the WiFi password.</li>
+      <li>Click <strong style="color:var(--text)">Save &amp; Reboot</strong>.</li>
+      <li>The device will reboot and connect to your WiFi.</li>
+      <li>After connecting, access the motor dashboard at the new IP address (shown on OLED).</li>
+    </ol>
+    <div style="margin-top:12px">
+      <a href="/index.html">← Motor Dashboard</a>
+    </div>
+  </div>
+</main>
+
+<!-- Rebooting overlay -->
+<div class="overlay hidden" id="overlay">
+  <div><span class="spinner"></span> Saving &amp; Rebooting...</div>
+  <div style="font-size:0.85rem;color:var(--muted)">Device will reconnect to your WiFi.<br>Check your router for the new IP address.</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+async function fetchStatus() {
+  try {
+    const r = await fetch('/api/setup/status');
+    const d = await r.json();
+    updateStatusUI(d);
+  } catch(e) {}
+}
+
+function updateStatusUI(d) {
+  const state = d.state || 'UNKNOWN';
+  document.getElementById('wifiState').textContent = state;
+  document.getElementById('ipAddr').textContent    = d.ip      || '--';
+  document.getElementById('apName').textContent    = d.ap_name || '--';
+  document.getElementById('curSSID').textContent   = d.ssid    || '--';
+
+  const badge = document.getElementById('stateBadge');
+  if (state === 'CONNECTED') {
+    badge.textContent  = 'CONNECTED';
+    badge.className    = 'badge badge-connected';
+  } else {
+    badge.textContent  = state;
+    badge.className    = 'badge badge-ap';
+  }
+}
+
+async function scanNetworks() {
+  const btn = document.getElementById('btnScan');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Scanning...';
+
+  try {
+    const r = await fetch('/api/setup/networks');
+    const d = await r.json();
+    renderNetworks(d.networks || []);
+  } catch(e) {
+    showToast('Scan failed');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '🔍 Refresh Networks';
+}
+
+function renderNetworks(nets) {
+  const list = document.getElementById('netList');
+  if (!nets.length) {
+    list.innerHTML = '<li class="empty">No networks found</li>';
+    return;
+  }
+  list.innerHTML = nets.map(n =>
+    `<li onclick="selectNetwork('${escHtml(n)}')">${escHtml(n)}</li>`
+  ).join('');
+}
+
+function selectNetwork(ssid) {
+  document.getElementById('ssidInput').value = ssid;
+  document.querySelectorAll('.net-list li').forEach(li => {
+    li.classList.toggle('selected', li.textContent === ssid);
+  });
+  document.getElementById('pwInput').focus();
+}
+
+async function saveCredentials() {
+  const ssid = document.getElementById('ssidInput').value.trim();
+  const pw   = document.getElementById('pwInput').value;
+
+  if (!ssid) { showToast('Please enter an SSID'); return; }
+
+  document.getElementById('btnSave').disabled = true;
+
+  try {
+    const r = await fetch('/api/setup/wifi', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ssid, password: pw})
+    });
+    const d = await r.json();
+    if (d.success) {
+      document.getElementById('overlay').classList.remove('hidden');
+    } else {
+      showToast(d.message || 'Error');
+      document.getElementById('btnSave').disabled = false;
+    }
+  } catch(e) {
+    showToast('Request failed');
+    document.getElementById('btnSave').disabled = false;
+  }
+}
+
+async function clearCredentials() {
+  if (!confirm('Clear saved WiFi credentials and reboot into AP mode?')) return;
+  try {
+    await fetch('/api/setup/clear', {method:'POST'});
+    document.getElementById('overlay').classList.remove('hidden');
+  } catch(e) { showToast('Error'); }
+}
+
+function togglePw() {
+  const inp = document.getElementById('pwInput');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Initial load
+fetchStatus();
+scanNetworks();
+setInterval(fetchStatus, 5000);
+setInterval(() => {
+  // Auto-refresh networks every 10s
+  scanNetworks();
+}, 10000);
+</script>
+</body>
+</html>
