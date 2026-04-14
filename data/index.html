@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DC Motor Controller</title>
+  <style>
+    /* ---- Reset & base ---- */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #0f1117;
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: 16px;
+    }
+
+    /* ---- Layout ---- */
+    header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    header h1 {
+      font-size: 1.6rem;
+      color: #4fc3f7;
+      letter-spacing: 2px;
+    }
+    header p { font-size: 0.85rem; color: #888; margin-top: 4px; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    /* ---- Card ---- */
+    .card {
+      background: #1e2130;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+    .card h2 {
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #888;
+      margin-bottom: 12px;
+    }
+
+    /* ---- Current gauge ---- */
+    .gauge-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #current-value {
+      font-size: 3.5rem;
+      font-weight: 700;
+      color: #4fc3f7;
+      line-height: 1;
+    }
+    #current-unit { font-size: 1.2rem; color: #888; margin-top: 4px; }
+
+    /* Progress bar for current */
+    .bar-track {
+      width: 100%;
+      height: 14px;
+      background: #2a2d3e;
+      border-radius: 7px;
+      overflow: hidden;
+      margin-top: 14px;
+    }
+    #current-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #00e676, #ffeb3b, #f44336);
+      border-radius: 7px;
+      transition: width 0.4s ease;
+    }
+
+    /* ---- Status badges ---- */
+    .status-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .badge {
+      flex: 1;
+      min-width: 100px;
+      text-align: center;
+      padding: 12px 8px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      transition: background 0.3s, color 0.3s;
+    }
+    .badge-label { font-size: 0.65rem; font-weight: 400; color: #aaa; display: block; margin-bottom: 4px; }
+    .on  { background: #1b5e20; color: #66bb6a; }
+    .off { background: #3e2723; color: #ef9a9a; }
+    .fault { background: #b71c1c; color: #fff; animation: blink 0.8s infinite; }
+
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+    /* ---- Threshold slider ---- */
+    .threshold-wrap { margin-top: 8px; }
+    .threshold-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    #threshold-display {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #ffb74d;
+      min-width: 70px;
+      text-align: right;
+    }
+    #threshold-slider {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 8px;
+      border-radius: 4px;
+      background: #2a2d3e;
+      outline: none;
+    }
+    #threshold-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: #ffb74d;
+      cursor: pointer;
+      border: 3px solid #0f1117;
+    }
+    #threshold-slider::-moz-range-thumb {
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      background: #ffb74d;
+      cursor: pointer;
+      border: 3px solid #0f1117;
+    }
+    .btn-save {
+      margin-top: 10px;
+      width: 100%;
+      padding: 10px;
+      background: #1565c0;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-save:hover { background: #1976d2; }
+    .btn-save:active { background: #0d47a1; }
+
+    /* ---- Relay control buttons ---- */
+    .relay-buttons { display: flex; gap: 12px; margin-top: 8px; }
+    .relay-btn {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .relay-btn:active { opacity: 0.7; }
+    #btn-relay-on  { background: #2e7d32; color: #fff; }
+    #btn-relay-off { background: #c62828; color: #fff; }
+
+    /* ---- WiFi / info card ---- */
+    .info-list { list-style: none; }
+    .info-list li {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      border-bottom: 1px solid #2a2d3e;
+      font-size: 0.88rem;
+    }
+    .info-list li:last-child { border: none; }
+    .info-list .val { color: #4fc3f7; font-weight: 600; }
+
+    /* ---- Chart ---- */
+    canvas#history-chart {
+      width: 100%;
+      height: 140px;
+    }
+
+    /* ---- Footer ---- */
+    footer {
+      text-align: center;
+      margin-top: 24px;
+      font-size: 0.75rem;
+      color: #444;
+    }
+
+    /* ---- Responsive ---- */
+    @media(max-width:400px) {
+      #current-value { font-size: 2.6rem; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ DC Motor Controller</h1>
+  <p>ESP32 + ACS712-30A | Real-time monitoring</p>
+</header>
+
+<div class="grid">
+
+  <!-- Current Gauge -->
+  <div class="card gauge-wrap">
+    <h2>Live Current</h2>
+    <div id="current-value">--.-</div>
+    <div id="current-unit">Amperes</div>
+    <div class="bar-track"><div id="current-bar"></div></div>
+  </div>
+
+  <!-- Status -->
+  <div class="card">
+    <h2>System Status</h2>
+    <div class="status-row">
+      <div class="badge off" id="badge-relay">
+        <span class="badge-label">Relay</span>
+        <span id="txt-relay">OFF</span>
+      </div>
+      <div class="badge off" id="badge-motor">
+        <span class="badge-label">Motor</span>
+        <span id="txt-motor">STOPPED</span>
+      </div>
+      <div class="badge off" id="badge-fault">
+        <span class="badge-label">Fault</span>
+        <span id="txt-fault">CLEAR</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Threshold -->
+  <div class="card">
+    <h2>Current Threshold</h2>
+    <div class="threshold-wrap">
+      <div class="threshold-row">
+        <span style="color:#888;font-size:0.85rem;">0 A</span>
+        <span id="threshold-display">-- A</span>
+        <span style="color:#888;font-size:0.85rem;">20 A</span>
+      </div>
+      <input type="range" id="threshold-slider" min="0.5" max="20" step="0.5" value="10" />
+      <button class="btn-save" id="btn-set-threshold">Set Threshold</button>
+    </div>
+  </div>
+
+  <!-- Relay Control -->
+  <div class="card">
+    <h2>Manual Relay Control</h2>
+    <p style="font-size:0.8rem;color:#888;margin-bottom:8px;">
+      Turning the relay ON will reset any over-current fault.
+    </p>
+    <div class="relay-buttons">
+      <button class="relay-btn" id="btn-relay-on">▶ ON</button>
+      <button class="relay-btn" id="btn-relay-off">■ OFF</button>
+    </div>
+  </div>
+
+  <!-- Current History Chart -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <h2>Current History (last 60 s)</h2>
+    <canvas id="history-chart"></canvas>
+  </div>
+
+  <!-- Info -->
+  <div class="card">
+    <h2>Device Info</h2>
+    <ul class="info-list">
+      <li><span>IP Address</span><span class="val" id="info-ip">--</span></li>
+      <li><span>WiFi RSSI</span><span class="val" id="info-rssi">-- dBm</span></li>
+      <li><span>Threshold</span><span class="val" id="info-threshold">-- A</span></li>
+      <li><span>Last Update</span><span class="val" id="info-time">--</span></li>
+    </ul>
+  </div>
+
+</div><!-- .grid -->
+
+<footer>
+  ESP32 DC Motor Controller &mdash; ACS712-30A &mdash;
+  Auto-refresh every 1 s
+</footer>
+
+<script>
+// =============================================================================
+// Dashboard JavaScript
+// =============================================================================
+
+const MAX_HISTORY = 60;   // seconds of history
+const POLL_INTERVAL_MS = 1000;
+
+// Chart data
+const historyData = [];
+let thresholdHistory = [];
+
+// ---- Fetch status from API ----
+async function fetchStatus() {
+  try {
+    const resp = await fetch('/api/status');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    return await resp.json();
+  } catch (e) {
+    console.warn('fetchStatus error:', e);
+    return null;
+  }
+}
+
+// ---- Update UI ----
+function updateUI(data) {
+  if (!data) return;
+
+  const current   = parseFloat(data.current)   || 0;
+  const threshold = parseFloat(data.threshold) || 10;
+  const relayOn   = !!data.relay;
+  const running   = !!data.running;
+  const faulted   = !!data.faulted;
+  const rssi      = data.rssi || 0;
+  const ip        = data.ip  || '--';
+
+  // Current value
+  document.getElementById('current-value').textContent = current.toFixed(2);
+
+  // Bar
+  const pct = Math.min((current / 20) * 100, 100);
+  document.getElementById('current-bar').style.width = pct + '%';
+
+  // Status badges
+  setBadge('badge-relay', 'txt-relay', relayOn, relayOn ? 'ON' : 'OFF');
+  setBadge('badge-motor', 'txt-motor', running, running ? 'RUNNING' : 'STOPPED');
+
+  const faultEl = document.getElementById('badge-fault');
+  const faultTx = document.getElementById('txt-fault');
+  if (faulted) {
+    faultEl.className = 'badge fault';
+    faultTx.textContent = 'FAULT';
+  } else {
+    faultEl.className = 'badge on';
+    faultTx.textContent = 'CLEAR';
+  }
+
+  // Threshold slider sync (only if not being dragged)
+  if (document.activeElement !== document.getElementById('threshold-slider')) {
+    document.getElementById('threshold-slider').value = threshold;
+    document.getElementById('threshold-display').textContent = threshold.toFixed(1) + ' A';
+  }
+
+  // Info panel
+  document.getElementById('info-ip').textContent        = ip;
+  document.getElementById('info-rssi').textContent      = rssi + ' dBm';
+  document.getElementById('info-threshold').textContent = threshold.toFixed(1) + ' A';
+  document.getElementById('info-time').textContent      = new Date().toLocaleTimeString();
+
+  // History
+  historyData.push(current);
+  thresholdHistory.push(threshold);
+  if (historyData.length > MAX_HISTORY) {
+    historyData.shift();
+    thresholdHistory.shift();
+  }
+  drawChart();
+}
+
+function setBadge(badgeId, textId, isOn, label) {
+  const el = document.getElementById(badgeId);
+  el.className = 'badge ' + (isOn ? 'on' : 'off');
+  document.getElementById(textId).textContent = label;
+}
+
+// ---- Simple canvas chart ----
+function drawChart() {
+  const canvas = document.getElementById('history-chart');
+  const ctx    = canvas.getContext('2d');
+  const W = canvas.offsetWidth;
+  const H = canvas.offsetHeight;
+  canvas.width  = W;
+  canvas.height = H;
+
+  ctx.clearRect(0, 0, W, H);
+
+  if (historyData.length < 2) return;
+
+  const maxA  = 22;   // Y-axis max
+  const padL  = 36;
+  const padR  = 8;
+  const padT  = 10;
+  const padB  = 24;
+  const cW    = W - padL - padR;
+  const cH    = H - padT - padB;
+
+  // Background grid
+  ctx.strokeStyle = '#2a2d3e';
+  ctx.lineWidth   = 1;
+  for (let a = 0; a <= maxA; a += 5) {
+    const y = padT + cH - (a / maxA) * cH;
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(padL + cW, y);
+    ctx.stroke();
+    ctx.fillStyle = '#555';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(a + 'A', 2, y + 4);
+  }
+
+  const xStep = cW / (MAX_HISTORY - 1);
+
+  // Threshold line
+  if (thresholdHistory.length) {
+    const thr = thresholdHistory[thresholdHistory.length - 1];
+    const ty  = padT + cH - (thr / maxA) * cH;
+    ctx.strokeStyle = '#ffb74d';
+    ctx.lineWidth   = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(padL, ty);
+    ctx.lineTo(padL + cW, ty);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Current trace
+  ctx.strokeStyle = '#4fc3f7';
+  ctx.lineWidth   = 2;
+  ctx.beginPath();
+  historyData.forEach((v, i) => {
+    const x = padL + i * xStep;
+    const y = padT + cH - (Math.min(v, maxA) / maxA) * cH;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // X-axis labels
+  ctx.fillStyle = '#555';
+  ctx.font = '10px sans-serif';
+  ctx.fillText('-' + MAX_HISTORY + 's', padL, H - 6);
+  ctx.fillText('now', padL + cW - 18, H - 6);
+}
+
+// ---- Threshold slider live display ----
+document.getElementById('threshold-slider').addEventListener('input', function () {
+  document.getElementById('threshold-display').textContent =
+    parseFloat(this.value).toFixed(1) + ' A';
+});
+
+// ---- Save threshold ----
+document.getElementById('btn-set-threshold').addEventListener('click', async function () {
+  const val = parseFloat(document.getElementById('threshold-slider').value);
+  this.textContent = 'Saving…';
+  this.disabled = true;
+  try {
+    const resp = await fetch('/api/threshold', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threshold: val })
+    });
+    const data = await resp.json();
+    this.textContent = data.success ? '✓ Saved' : '✗ Error';
+  } catch (e) {
+    this.textContent = '✗ Error';
+  }
+  setTimeout(() => {
+    this.textContent = 'Set Threshold';
+    this.disabled = false;
+  }, 1500);
+});
+
+// ---- Relay ON ----
+document.getElementById('btn-relay-on').addEventListener('click', async () => {
+  await sendRelay(true);
+});
+
+// ---- Relay OFF ----
+document.getElementById('btn-relay-off').addEventListener('click', async () => {
+  await sendRelay(false);
+});
+
+async function sendRelay(state) {
+  try {
+    await fetch('/api/relay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relay: state })
+    });
+  } catch (e) {
+    console.warn('sendRelay error:', e);
+  }
+}
+
+// ---- Poll loop ----
+async function poll() {
+  const data = await fetchStatus();
+  updateUI(data);
+  setTimeout(poll, POLL_INTERVAL_MS);
+}
+
+// Start
+poll();
+</script>
+</body>
+</html>
