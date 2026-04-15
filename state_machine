@@ -1,0 +1,28 @@
+       ┌─────────────────────────┐
+       │       STOPPED           │
+       └────────┬────────────────┘
+                │
+                │ [S1 pressed or web START]
+                ▼
+       ┌─────────────────────────┐
+       │     SOFT_START_RAMP     │
+       │    (0-10 seconds)       │
+       └────────┬─────┬──────────┘
+                │     │
+                │     │ [Overcurrent]
+                │     ▼
+       ┌────────────────────────────┐
+       │  OVERCURRENT_CUTOFF        │
+       │  (Motor stopped, wait S1)  │
+       └────────────────────────────┘
+                │
+                │ [Ramp complete]
+                ▼
+       ┌─────────────────────────┐
+       │       RUNNING           │
+       │ (SoftStart relay ON)    │
+       └─────────┬───────────────┘
+                │
+                │ [Overcurrent OR S2 pressed]
+                ▼
+              STOP
