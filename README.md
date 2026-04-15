@@ -1,2 +1,2 @@
-# dc-motor-controller
-Adjustable current dc motor controller with esp32 web base
+# DC Motor Controller
+Adjustable-current DC motor controller with an ESP32 web-based interface.
