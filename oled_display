@@ -1,0 +1,6 @@
+MOTOR v5.0
+V:24.0  I:0.00
+Lim:15  SS:5
+Motor: STOP
+R1:OFF R2:OFF
+S1=START   S2=STOP
