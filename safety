@@ -1,0 +1,7 @@
+🔐 Safety Features
+Overcurrent Protection: Auto-stop @ configured limit
+Zener Overvoltage Protection: GPIO safeguard
+Voltage Monitoring: Out-of-range detection
+Safe State Machine: Prevents invalid transitions
+Button Debouncing: 50ms debounce time
+Relay Failsafe: Defaults to OFF state
