@@ -1,0 +1,21 @@
+🔧 Troubleshooting
+OLED Not Displaying
+Check I2C address: 0x3C
+Verify GPIO21 (SDA) and GPIO22 (SCL) connections
+Use I2C scanner to debug
+Current Reading Incorrect
+Calibrate ACS712_ZERO_OFFSET_MV if offset differs
+Verify ACS712 power supply (5V)
+Check GPIO34 ADC connection
+Motor Not Starting
+Verify 24V power supply (22.8V - 25.2V)
+Check relay connections (GPIO12, GPIO13)
+Monitor serial output for errors
+WiFi Connection Issues
+Ensure correct SSID format: MOTOR_CTRL_XXXXXX
+Try forgetting network and reconnecting
+Check ESP32 antenna connection
+Overcurrent Triggered
+Reduce current limit setting
+Check motor load (may be overloaded)
+Verify ACS712 sensor accuracy
