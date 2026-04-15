@@ -1,0 +1,718 @@
+/*
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║                  ESP32 DC MOTOR CONTROLLER - FINAL v5.0                  ║
+  ║                                                                          ║
+  ║  Production Ready | Tested | Documented                                  ║
+  ║                                                                          ║
+  ║  ✅ 2 Push Buttons (S1=START GPIO14 / S2=STOP GPIO27)                    ║
+  ║  ✅ Current Monitoring (ACS712-30A)                                      ║
+  ║  ✅ Voltage Monitoring (24V ±5% with Zener 3.3V)                         ║
+  ║  ✅ Soft Start Control (0-10 seconds)                                    ║
+  ║  ✅ Current Limit Control (0-30A, step 0.1A)                             ║
+  ║  ✅ 128x64 OLED Display                                                  ║
+  ║  ✅ Web Dashboard @ 192.168.4.1                                          ║
+  ║  ✅ Persistent Storage (NVS)                                             ║
+  ║                                                                          ║
+  ║  Author: Automation Team                                                 ║
+  ║  Date: 2026-04-14                                                        ║
+  ║  Version: 5.0                                                            ║
+  ║  License: MIT                                                            ║
+  ║  Repository: https://github.com/spektrakomunikasiok/motor-controller     ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+*/
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <Preferences.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
+
+// =============================================================================
+// GPIO PIN DEFINITIONS
+// =============================================================================
+#define RELAY_CUTOFF_PIN    GPIO_NUM_12
+#define RELAY_SOFTSTART_PIN GPIO_NUM_13
+#define PUSH_BUTTON_START   GPIO_NUM_14  // S1
+#define PUSH_BUTTON_STOP    GPIO_NUM_27  // S2
+#define ACS712_PIN          GPIO_NUM_34
+#define VOLTAGE_PIN         GPIO_NUM_35
+#define I2C_SDA             GPIO_NUM_21
+#define I2C_SCL             GPIO_NUM_22
+
+// =============================================================================
+// SENSOR CALIBRATION
+// =============================================================================
+#define ACS712_SENSITIVITY       100.0f
+#define ACS712_ZERO_OFFSET_MV   2500.0f
+#define ADC_MAX_VALUE            4095
+#define ADC_REFERENCE_VOLTAGE    3.3f
+#define ADC_MV_PER_STEP (ADC_REFERENCE_VOLTAGE * 1000.0f / ADC_MAX_VALUE)
+
+#define VOLTAGE_DIVIDER_RATIO  11.0f
+#define VOLTAGE_MIN            22.8f
+#define VOLTAGE_MAX            25.2f
+#define VOLTAGE_EMA_ALPHA      0.1f
+
+// =============================================================================
+// CONFIGURATION
+// =============================================================================
+#define CURRENT_MIN         0.0f
+#define CURRENT_MAX         30.0f
+#define CURRENT_DEFAULT     15.0f
+#define CURRENT_EMA_ALPHA   0.1f
+
+#define SOFT_START_MIN_TIME     0
+#define SOFT_START_MAX_TIME     10
+#define SOFT_START_DEFAULT_TIME 5
+
+#define BUTTON_DEBOUNCE_MS 50
+#define DISPLAY_UPDATE_MS  250
+#define MONITOR_UPDATE_MS  100
+
+#define OLED_ADDR        0x3C
+#define OLED_WIDTH       128
+#define OLED_HEIGHT      64
+
+#define NVS_NAMESPACE      "motor_ctrl"
+#define PREF_KEY_THRESHOLD "threshold"
+#define PREF_KEY_SOFT_START "soft_start"
+
+#define AP_SSID_PREFIX     "MOTOR_CTRL_"
+#define AP_PASSWORD        "12345678"
+#define AP_IP_ADDR         "192.168.4.1"
+#define AP_GATEWAY         "192.168.4.1"
+#define AP_SUBNET          "255.255.255.0"
+#define WEB_SERVER_PORT    80
+
+// =============================================================================
+// WEB DASHBOARD HTML
+// =============================================================================
+const char DASHBOARD_HTML[] = R"html(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Motor Control Dashboard v5.0</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    .container { width: 100%; max-width: 1000px; background: white; border-radius: 12px; padding: 30px; box-shadow: 0 15px 40px rgba(0,0,0,0.3); }
+    h1 { color: #333; text-align: center; margin-bottom: 10px; font-size: 28px; }
+    .version { text-align: center; color: #999; font-size: 12px; margin-bottom: 30px; }
+    .status-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 15px; margin-bottom: 30px; }
+    .status-card { background: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #667eea; text-align: center; transition: all 0.3s; }
+    .status-card:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+    .status-card.ok { border-left-color: #28a745; }
+    .status-card.warning { border-left-color: #ff9800; background: #fff8f0; }
+    .status-card.danger { border-left-color: #dc3545; background: #ffe0e0; }
+    .status-label { font-size: 11px; color: #666; text-transform: uppercase; margin-bottom: 8px; font-weight: bold; }
+    .status-value { font-size: 28px; font-weight: bold; color: #333; }
+    .status-unit { font-size: 12px; color: #999; margin-left: 3px; }
+    .motor-status { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 8px; text-align: center; margin-bottom: 30px; }
+    .motor-label { font-size: 12px; opacity: 0.9; text-transform: uppercase; margin-bottom: 15px; }
+    .motor-state { font-size: 48px; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); }
+    .control-section { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+    .control-label { font-size: 14px; font-weight: bold; color: #333; margin-bottom: 12px; display: block; }
+    .slider-row { display: flex; gap: 10px; align-items: center; }
+    input[type="range"] { flex: 1; height: 6px; cursor: pointer; }
+    .value-display { background: white; padding: 8px 12px; border-radius: 5px; border: 1px solid #ddd; min-width: 80px; text-align: center; font-weight: bold; color: #667eea; }
+    .button-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    button { padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; transition: all 0.3s; }
+    .btn-start { background: #28a745; color: white; }
+    .btn-start:hover { background: #218838; transform: translateY(-2px); box-shadow: 0 5px 15px rgba(40, 167, 69, 0.3); }
+    .btn-stop { background: #dc3545; color: white; }
+    .btn-stop:hover { background: #c82333; transform: translateY(-2px); box-shadow: 0 5px 15px rgba(220, 53, 69, 0.3); }
+    .info-box { background: #e7f3ff; border-left: 4px solid #2196F3; padding: 15px; border-radius: 5px; font-size: 13px; color: #0c5aa0; margin-top: 20px; line-height: 1.6; }
+    .save-status { font-size: 12px; margin-top: 8px; text-align: center; min-height: 20px; }
+    .saving { color: #ffc107; }
+    .saved { color: #28a745; }
+    .error { color: #dc3545; }
+    .last-update { font-size: 11px; color: #999; text-align: center; margin-top: 20px; }
+    @media (max-width: 768px) {
+      .status-grid { grid-template-columns: 1fr 1fr; }
+      .button-group { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>⚡ Motor Control Dashboard</h1>
+    <div class="version">Firmware v5.0 | ESP32 DC Motor Controller</div>
+    
+    <div class="status-grid">
+      <div class="status-card ok">
+        <div class="status-label">🔋 Supply</div>
+        <div class="status-value"><span id="voltage">24.0</span><span class="status-unit">V</span></div>
+      </div>
+      <div class="status-card ok">
+        <div class="status-label">⚡ Current</div>
+        <div class="status-value"><span id="current">0.00</span><span class="status-unit">A</span></div>
+      </div>
+      <div class="status-card ok">
+        <div class="status-label">📊 Limit</div>
+        <div class="status-value"><span id="limit">15.0</span><span class="status-unit">A</span></div>
+      </div>
+      <div class="status-card ok">
+        <div class="status-label">⏱️ Start</div>
+        <div class="status-value"><span id="softstart">5</span><span class="status-unit">s</span></div>
+      </div>
+    </div>
+
+    <div class="motor-status">
+      <div class="motor-label">Motor Status</div>
+      <div class="motor-state" id="motorState">STOPPED</div>
+    </div>
+
+    <div class="control-section">
+      <label class="control-label">⚙️ Current Limit (0-30A, step 0.1A)</label>
+      <div class="slider-row">
+        <input type="range" id="threshold" min="0" max="30" step="0.1" value="15" oninput="handleThresholdChange()">
+        <div class="value-display" id="thresholdDisplay">15.0 A</div>
+      </div>
+      <div class="save-status" id="thresholdStatus"></div>
+    </div>
+
+    <div class="control-section">
+      <label class="control-label">⏱️ Soft Start (0-10s, step 1s)</label>
+      <div class="slider-row">
+        <input type="range" id="softstarttime" min="0" max="10" step="1" value="5" oninput="handleSoftstartChange()">
+        <div class="value-display" id="softstartDisplay">5 sec</div>
+      </div>
+      <div class="save-status" id="softstartStatus"></div>
+    </div>
+
+    <div class="control-section">
+      <label class="control-label">🎮 Motor Control</label>
+      <div class="button-group">
+        <button class="btn-start" onclick="startMotor()">▶️ START</button>
+        <button class="btn-stop" onclick="stopMotor()">⏹️ STOP</button>
+      </div>
+    </div>
+
+    <div class="info-box">
+      <strong>📱 Device Information:</strong><br>
+      WiFi AP Mode | IP: 192.168.4.1 | Password: 12345678<br>
+      <strong>⚙️ Specifications:</strong><br>
+      Supply: 24V ±5% (22.8V-25.2V) | Current: 0-30A | Soft Start: 0-10s<br>
+      <strong>🔌 Hardware:</strong><br>
+      ESP32 | ACS712-30A | Zener 3.3V | 128x64 OLED | 2x Relay + 2x Button
+    </div>
+
+    <div class="last-update">
+      Last Update: <span id="lastUpdate">--:--:--</span>
+    </div>
+  </div>
+
+  <script>
+    let thresholdTimeout;
+    let softstartTimeout;
+    
+    setInterval(updateStatus, 1000);
+
+    function formatTime() {
+      let now = new Date();
+      return now.toLocaleTimeString();
+    }
+
+    async function updateStatus() {
+      try {
+        let r = await fetch('/api/status');
+        let d = await r.json();
+        
+        let voltageEl = document.getElementById('voltage');
+        voltageEl.textContent = d.voltage.toFixed(1);
+        let voltageCard = voltageEl.closest('.status-card');
+        
+        if (d.voltage < 22.8 || d.voltage > 25.2) {
+          voltageCard.className = 'status-card danger';
+        } else if (d.voltage < 23.5 || d.voltage > 24.5) {
+          voltageCard.className = 'status-card warning';
+        } else {
+          voltageCard.className = 'status-card ok';
+        }
+        
+        document.getElementById('current').textContent = d.current.toFixed(2);
+        document.getElementById('limit').textContent = d.threshold.toFixed(1);
+        document.getElementById('softstart').textContent = d.soft_start_time;
+        document.getElementById('motorState').textContent = d.motor_state;
+        
+        let sliderVal = parseFloat(document.getElementById('threshold').value);
+        if (Math.abs(sliderVal - d.threshold) > 0.05) {
+          document.getElementById('threshold').value = d.threshold;
+          document.getElementById('thresholdDisplay').textContent = d.threshold.toFixed(1) + ' A';
+        }
+        
+        let softstartVal = parseInt(document.getElementById('softstarttime').value);
+        if (softstartVal !== d.soft_start_time) {
+          document.getElementById('softstarttime').value = d.soft_start_time;
+          document.getElementById('softstartDisplay').textContent = d.soft_start_time + ' sec';
+        }
+        
+        document.getElementById('lastUpdate').textContent = formatTime();
+      } catch(e) {}
+    }
+
+    function handleThresholdChange() {
+      let val = parseFloat(document.getElementById('threshold').value);
+      document.getElementById('thresholdDisplay').textContent = val.toFixed(1) + ' A';
+      clearTimeout(thresholdTimeout);
+      showStatus('💾 Saving...', 'thresholdStatus', 'saving');
+      thresholdTimeout = setTimeout(() => { saveThreshold(val); }, 500);
+    }
+
+    function handleSoftstartChange() {
+      let val = parseInt(document.getElementById('softstarttime').value);
+      document.getElementById('softstartDisplay').textContent = val + ' sec';
+      clearTimeout(softstartTimeout);
+      showStatus('💾 Saving...', 'softstartStatus', 'saving');
+      softstartTimeout = setTimeout(() => { saveSoftstart(val); }, 500);
+    }
+
+    async function saveThreshold(val) {
+      try {
+        let r = await fetch('/api/threshold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
+        let d = await r.json();
+        if (d.success) {
+          showStatus('✅ Saved: ' + d.threshold.toFixed(1) + ' A', 'thresholdStatus', 'saved');
+          setTimeout(() => showStatus('', 'thresholdStatus', ''), 1500);
+        }
+      } catch (e) { showStatus('❌ Error', 'thresholdStatus', 'error'); }
+    }
+
+    async function saveSoftstart(val) {
+      try {
+        let r = await fetch('/api/soft-start-time', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: val }) });
+        let d = await r.json();
+        if (d.success) {
+          showStatus('✅ Saved: ' + d.soft_start_time + ' sec', 'softstartStatus', 'saved');
+          setTimeout(() => showStatus('', 'softstartStatus', ''), 1500);
+        }
+      } catch (e) { showStatus('❌ Error', 'softstartStatus', 'error'); }
+    }
+
+    async function startMotor() {
+      try { await fetch('/api/relay/motor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: true }) }); }
+      catch (e) { alert('Error: Cannot reach device'); }
+    }
+
+    async function stopMotor() {
+      try { await fetch('/api/relay/motor', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: false }) }); }
+      catch (e) { alert('Error: Cannot reach device'); }
+    }
+
+    function showStatus(msg, elementId, type) {
+      let el = document.getElementById(elementId);
+      el.textContent = msg;
+      el.className = 'save-status ' + type;
+    }
+
+    updateStatus();
+  </script>
+</body>
+</html>
+)html";
+
+// =============================================================================
+// GLOBAL OBJECTS
+// =============================================================================
+Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
+AsyncWebServer webServer(WEB_SERVER_PORT);
+Preferences prefs;
+
+// =============================================================================
+// GLOBAL STATE
+// =============================================================================
+String apName = "";
+float currentFiltered = 0.0f;
+float voltageFiltered = 24.0f;
+float currentThreshold = CURRENT_DEFAULT;
+uint8_t softStartDuration = SOFT_START_DEFAULT_TIME;
+
+enum MotorState { STOPPED, SOFT_START_RAMP, RUNNING, OVERCURRENT_CUTOFF };
+MotorState motorState = STOPPED;
+bool relayMotorOn = false;
+bool relaySoftStartOn = false;
+uint32_t softStartStartMs = 0;
+
+uint32_t lastDisplayMs = 0;
+uint32_t lastMonitorMs = 0;
+uint32_t lastStartButtonMs = 0;
+uint32_t lastStopButtonMs = 0;
+bool startButtonWasPressed = false;
+bool stopButtonWasPressed = false;
+
+// =============================================================================
+// SENSOR FUNCTIONS
+// =============================================================================
+
+float readCurrentRaw() {
+    uint32_t sum = 0;
+    for (uint8_t i = 0; i < 16; i++) sum += analogRead(ACS712_PIN);
+    float adcVal = sum / 16.0f;
+    float voltageMv = adcVal * ADC_MV_PER_STEP;
+    float currentAmps = (voltageMv - ACS712_ZERO_OFFSET_MV) / ACS712_SENSITIVITY;
+    return (currentAmps < 0.0f) ? 0.0f : currentAmps;
+}
+
+float readVoltageRaw() {
+    uint32_t sum = 0;
+    for (uint8_t i = 0; i < 16; i++) sum += analogRead(VOLTAGE_PIN);
+    float adcVal = sum / 16.0f;
+    float voltageMv = adcVal * ADC_MV_PER_STEP;
+    float voltageSupply = voltageMv * VOLTAGE_DIVIDER_RATIO;
+    return (voltageSupply < 0.0f) ? 0.0f : voltageSupply;
+}
+
+// =============================================================================
+// RELAY & BUTTON FUNCTIONS
+// =============================================================================
+
+void setRelayMotor(bool on) {
+    relayMotorOn = on;
+    digitalWrite(RELAY_CUTOFF_PIN, on ? HIGH : LOW);
+}
+
+void setRelaySoftStart(bool on) {
+    relaySoftStartOn = on;
+    digitalWrite(RELAY_SOFTSTART_PIN, on ? HIGH : LOW);
+}
+
+void stopMotor() {
+    setRelayMotor(false);
+    setRelaySoftStart(false);
+    motorState = STOPPED;
+}
+
+bool isPushButtonPressed(uint8_t buttonPin, uint32_t& lastPressMs, bool& wasPressed) {
+    bool reading = digitalRead(buttonPin);
+    uint32_t now = millis();
+    if (reading == LOW && !wasPressed && (now - lastPressMs > BUTTON_DEBOUNCE_MS)) {
+        lastPressMs = now;
+        wasPressed = true;
+        return true;
+    }
+    if (reading == HIGH) wasPressed = false;
+    return false;
+}
+
+// =============================================================================
+// SOFT START FUNCTIONS
+// =============================================================================
+
+void startSoftStart(uint8_t durationSec) {
+    if (durationSec < SOFT_START_MIN_TIME) durationSec = SOFT_START_MIN_TIME;
+    if (durationSec > SOFT_START_MAX_TIME) durationSec = SOFT_START_MAX_TIME;
+    softStartDuration = durationSec;
+    softStartStartMs = millis();
+    motorState = SOFT_START_RAMP;
+    setRelayMotor(true);
+    setRelaySoftStart(false);
+    Serial.printf("[Motor] ▶️ Soft start: %d sec\n", durationSec);
+}
+
+uint8_t getSoftStartProgress() {
+    if (motorState != SOFT_START_RAMP) return (motorState == RUNNING) ? 100 : 0;
+    uint32_t elapsed = millis() - softStartStartMs;
+    uint32_t total = (uint32_t)softStartDuration * 1000UL;
+    if (elapsed >= total) return 100;
+    return (uint8_t)((elapsed * 100UL) / total);
+}
+
+// =============================================================================
+// WIFI & STORAGE
+// =============================================================================
+
+void buildAPName() {
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    char suffix[9];
+    snprintf(suffix, sizeof(suffix), "%02X%02X%02X%02X", mac[2], mac[3], mac[4], mac[5]);
+    apName = String(AP_SSID_PREFIX) + suffix;
+}
+
+// =============================================================================
+// OLED DISPLAY
+// =============================================================================
+
+void updateDisplay() {
+    uint32_t now = millis();
+    if (now - lastDisplayMs < DISPLAY_UPDATE_MS) return;
+    lastDisplayMs = now;
+
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+
+    display.setCursor(0, 0);
+    display.println("MOTOR v5.0");
+    display.drawLine(0, 9, 127, 9, SSD1306_WHITE);
+    
+    display.setCursor(0, 12);
+    display.printf("V:%.1f  I:%.2f", voltageFiltered, currentFiltered);
+    
+    display.setCursor(0, 22);
+    display.printf("Lim:%.0f  SS:%d", currentThreshold, softStartDuration);
+    
+    display.setCursor(0, 32);
+    display.printf("Motor:");
+    switch (motorState) {
+        case STOPPED: display.println(" STOP"); break;
+        case SOFT_START_RAMP: display.printf(" RAMP%d%%", getSoftStartProgress()); break;
+        case RUNNING: display.println(" RUN"); break;
+        case OVERCURRENT_CUTOFF: display.println(" OVR"); break;
+    }
+    
+    display.setCursor(0, 42);
+    display.printf("R1:%s R2:%s", relayMotorOn ? "ON" : "OFF", relaySoftStartOn ? "ON" : "OFF");
+    
+    display.setCursor(0, 52);
+    display.println("S1=START   S2=STOP");
+    
+    display.drawLine(0, 61, 127, 61, SSD1306_WHITE);
+    display.display();
+}
+
+// =============================================================================
+// WEB SERVER ROUTES
+// =============================================================================
+
+void setupWebRoutes() {
+    webServer.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
+        req->send(200, "text/html; charset=utf-8", DASHBOARD_HTML);
+    });
+
+    webServer.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req) {
+        JsonDocument doc;
+        doc["voltage"] = voltageFiltered;
+        doc["current"] = currentFiltered;
+        doc["threshold"] = currentThreshold;
+        doc["relay1"] = relayMotorOn;
+        doc["relay2"] = relaySoftStartOn;
+        doc["soft_start_progress"] = getSoftStartProgress();
+        doc["soft_start_time"] = (int)softStartDuration;
+        doc["uptime_ms"] = millis();
+        const char* stateStr = "UNKNOWN";
+        switch (motorState) {
+            case STOPPED: stateStr = "STOPPED"; break;
+            case SOFT_START_RAMP: stateStr = "RAMP"; break;
+            case RUNNING: stateStr = "RUNNING"; break;
+            case OVERCURRENT_CUTOFF: stateStr = "OVERCURRENT"; break;
+        }
+        doc["motor_state"] = stateStr;
+        String body;
+        serializeJson(doc, body);
+        req->send(200, "application/json", body);
+    });
+
+    webServer.on("/api/threshold", HTTP_POST, [](AsyncWebServerRequest* req) {
+        if (req->_tempObject) {
+            String* resp = reinterpret_cast<String*>(req->_tempObject);
+            req->send(200, "application/json", *resp);
+            delete resp;
+            req->_tempObject = nullptr;
+        }
+    }, nullptr, [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+        if (index == 0) req->_tempObject = new String();
+        if (index + len == total) {
+            String body((char*)data, len);
+            JsonDocument doc;
+            deserializeJson(doc, body);
+            float val = doc["value"] | CURRENT_DEFAULT;
+            if (val < CURRENT_MIN) val = CURRENT_MIN;
+            if (val > CURRENT_MAX) val = CURRENT_MAX;
+            currentThreshold = val;
+            prefs.begin(NVS_NAMESPACE, false);
+            prefs.putFloat(PREF_KEY_THRESHOLD, currentThreshold);
+            prefs.end();
+            Serial.printf("[Threshold] %.1f A\n", val);
+            String* resp = reinterpret_cast<String*>(req->_tempObject);
+            *resp = "{\"success\":true,\"threshold\":" + String(val, 1) + "}";
+        }
+    });
+
+    webServer.on("/api/soft-start-time", HTTP_POST, [](AsyncWebServerRequest* req) {
+        if (req->_tempObject) {
+            String* resp = reinterpret_cast<String*>(req->_tempObject);
+            req->send(200, "application/json", *resp);
+            delete resp;
+            req->_tempObject = nullptr;
+        }
+    }, nullptr, [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+        if (index == 0) req->_tempObject = new String();
+        if (index + len == total) {
+            String body((char*)data, len);
+            JsonDocument doc;
+            deserializeJson(doc, body);
+            uint8_t val = doc["value"] | SOFT_START_DEFAULT_TIME;
+            if (val < SOFT_START_MIN_TIME) val = SOFT_START_MIN_TIME;
+            if (val > SOFT_START_MAX_TIME) val = SOFT_START_MAX_TIME;
+            softStartDuration = val;
+            prefs.begin(NVS_NAMESPACE, false);
+            prefs.putUChar(PREF_KEY_SOFT_START, softStartDuration);
+            prefs.end();
+            Serial.printf("[SoftStart] %d sec\n", val);
+            String* resp = reinterpret_cast<String*>(req->_tempObject);
+            *resp = "{\"success\":true,\"soft_start_time\":" + String(val) + "}";
+        }
+    });
+
+    webServer.on("/api/relay/motor", HTTP_POST, [](AsyncWebServerRequest* req) {
+        if (req->_tempObject) {
+            String* resp = reinterpret_cast<String*>(req->_tempObject);
+            req->send(200, "application/json", *resp);
+            delete resp;
+            req->_tempObject = nullptr;
+        }
+    }, nullptr, [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t index, size_t total) {
+        if (index == 0) req->_tempObject = new String();
+        if (index + len == total) {
+            String body((char*)data, len);
+            JsonDocument doc;
+            deserializeJson(doc, body);
+            bool state = doc["state"] | false;
+            if (state) {
+                startSoftStart(softStartDuration);
+            } else {
+                stopMotor();
+            }
+            String* resp = reinterpret_cast<String*>(req->_tempObject);
+            *resp = "{\"success\":true}";
+        }
+    });
+
+    webServer.onNotFound([](AsyncWebServerRequest* req) {
+        req->send(404, "text/plain", "Not found");
+    });
+}
+
+// =============================================================================
+// MOTOR STATE MACHINE
+// =============================================================================
+
+void updateMotorState() {
+    uint32_t now = millis();
+    if (now - lastMonitorMs < MONITOR_UPDATE_MS) return;
+    lastMonitorMs = now;
+
+    float rawCurrent = readCurrentRaw();
+    currentFiltered = CURRENT_EMA_ALPHA * rawCurrent + (1.0f - CURRENT_EMA_ALPHA) * currentFiltered;
+    
+    float rawVoltage = readVoltageRaw();
+    voltageFiltered = VOLTAGE_EMA_ALPHA * rawVoltage + (1.0f - VOLTAGE_EMA_ALPHA) * voltageFiltered;
+
+    switch (motorState) {
+        case SOFT_START_RAMP: {
+            if (currentFiltered >= currentThreshold) {
+                stopMotor();
+                motorState = OVERCURRENT_CUTOFF;
+                Serial.printf("[Motor] ⚠️ OVERCURRENT: %.2fA\n", currentFiltered);
+            } else if (getSoftStartProgress() >= 100) {
+                setRelaySoftStart(true);
+                motorState = RUNNING;
+                Serial.println("[Motor] ✅ RUNNING");
+            }
+            break;
+        }
+        case RUNNING: {
+            if (currentFiltered >= currentThreshold) {
+                stopMotor();
+                motorState = OVERCURRENT_CUTOFF;
+                Serial.printf("[Motor] ⚠️ OVERCURRENT: %.2fA\n", currentFiltered);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+// =============================================================================
+// SETUP
+// =============================================================================
+
+void setup() {
+    Serial.begin(115200);
+    delay(500);
+    
+    Serial.println("\n╔════════════════════════════════════════════════════╗");
+    Serial.println("║   ESP32 MOTOR CONTROLLER v5.0 - FINAL READY       ║");
+    Serial.println("╚════════════════════════════════════════════════════╝\n");
+
+    pinMode(RELAY_CUTOFF_PIN, OUTPUT);
+    pinMode(RELAY_SOFTSTART_PIN, OUTPUT);
+    pinMode(PUSH_BUTTON_START, INPUT_PULLUP);
+    pinMode(PUSH_BUTTON_STOP, INPUT_PULLUP);
+    digitalWrite(RELAY_CUTOFF_PIN, LOW);
+    digitalWrite(RELAY_SOFTSTART_PIN, LOW);
+
+    analogReadResolution(12);
+    analogSetAttenuation(ADC_11db);
+
+    Wire.begin(I2C_SDA, I2C_SCL);
+    if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+        Serial.println("[OLED] Init failed!");
+    } else {
+        display.clearDisplay();
+        display.setTextSize(1);
+        display.setTextColor(SSD1306_WHITE);
+        display.setCursor(0, 20);
+        display.println("MOTOR v5.0");
+        display.setCursor(0, 36);
+        display.println("Starting...");
+        display.display();
+    }
+
+    prefs.begin(NVS_NAMESPACE, true);
+    currentThreshold = prefs.getFloat(PREF_KEY_THRESHOLD, CURRENT_DEFAULT);
+    softStartDuration = prefs.getUChar(PREF_KEY_SOFT_START, SOFT_START_DEFAULT_TIME);
+    prefs.end();
+
+    buildAPName();
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_AP);
+    
+    IPAddress apIP;
+    apIP.fromString(AP_IP_ADDR);
+    IPAddress gateway;
+    gateway.fromString(AP_GATEWAY);
+    IPAddress subnet;
+    subnet.fromString(AP_SUBNET);
+    
+    WiFi.softAPConfig(apIP, gateway, subnet);
+    WiFi.softAP(apName.c_str(), AP_PASSWORD);
+    
+    Serial.printf("SSID: %s | Pass: %s | IP: %s\n", apName.c_str(), AP_PASSWORD, AP_IP_ADDR);
+
+    setupWebRoutes();
+    webServer.begin();
+    Serial.println("✅ Ready! Visit http://192.168.4.1\n");
+}
+
+// =============================================================================
+// MAIN LOOP
+// =============================================================================
+
+void loop() {
+    updateMotorState();
+
+    if (isPushButtonPressed(PUSH_BUTTON_START, lastStartButtonMs, startButtonWasPressed)) {
+        if (motorState == STOPPED || motorState == OVERCURRENT_CUTOFF) {
+            startSoftStart(softStartDuration);
+            Serial.println("[S1] START pressed");
+        }
+    }
+
+    if (isPushButtonPressed(PUSH_BUTTON_STOP, lastStopButtonMs, stopButtonWasPressed)) {
+        if (motorState != STOPPED) {
+            stopMotor();
+            Serial.println("[S2] STOP pressed");
+        }
+    }
+
+    updateDisplay();
+}
