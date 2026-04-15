@@ -1,0 +1,223 @@
+
+---
+
+### **File 3: WIRING_DIAGRAM.txt**
+
+```text name="WIRING_DIAGRAM.txt"
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                  ESP32 DC MOTOR CONTROLLER - WIRING DIAGRAM                 ║
+║                          Version 5.0 | 24V System                           ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         ESP32 DEV MODULE (30 PINS)                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  [LEFT SIDE]                              [RIGHT SIDE]                     │
+│  GND ──────────────────────────────────── GND                              │
+│  3.3V ─────────────────────────────────── 5V                               │
+│  D35 (ADC1_7) ◄────── VOLTAGE SENSOR                                       │
+│  D34 (ADC1_6) ◄────── CURRENT SENSOR                                       │
+│  D39 (ADC1_3)                                                              │
+│  D36 (ADC1_0)                            D32                               │
+│  D4                          ──────────  D33                               │
+│  D2                          ──────────  D25                               │
+│  D15                         ──────────  D26                               │
+│  D13 ───────────────────────────────►   RELAY 2 (SOFT START)              │
+│  D12 ───────────────────────────────►   RELAY 1 (CUTOFF)                  │
+│  D14 ◄─────────────────────────────────  BUTTON S1 (START)                │
+│  D27 ◄─────────────────────────────────  BUTTON S2 (STOP)                 │
+│  D21 (SDA) ◄──────────────────────────── OLED SDA                         │
+│  D22 (SCL) ◄──────────────────────────── OLED SCL                         │
+│  D19                                                                        │
+│  D18                                                                        │
+│  D5                                                                         │
+│  D17                                                                        │
+│  D16                                                                        │
+│  D4                                                                         │
+│  D0                                                                         │
+│  D35                                                                        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        RELAY MODULE CONNECTIONS                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Relay 1 (MOTOR CUTOFF):              Relay 2 (SOFT START):               │
+│  ├─ IN ─────────────── GPIO12         ├─ IN ─────────────── GPIO13        │
+│  ├─ GND ─────────────── GND           ├─ GND ─────────────── GND          │
+│  ├─ VCC ─────────────── 5V            ├─ VCC ─────────────── 5V           │
+│  ├─ NO ────────────────► 24V(+)       ├─ NO ────────────────► Motor(+)    │
+│  └─ COM ────────────────► Motor(+)    └─ COM ────────────────► GND        │
+│                                                                             │
+│  Motor Load:                                                               │
+│  24V (+) ─────► Relay1(NO) ─────► Relay2(NO) ─────► Motor(+)             │
+│  Motor(-) ─────────────────────────────────────────► 24V(-)              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     VOLTAGE DIVIDER CIRCUIT (24V → 2.2V)                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│         24V PSU (+)                                                         │
+│              │                                                              │
+│              R1 (100kΩ)                                                     │
+│              │                                                              │
+│              ├──────────────────┬───────────► GPIO35 (ADC)                 │
+│              │                  │                                          │
+│              │               [100nF Cap]  ◄─ NOISE FILTER                 │
+│              │                  │                                          │
+│              │             [Zener 3.3V]  ◄─ OVERVOLTAGE PROTECTION       │
+│              │                  │                                          │
+│              R2 (10kΩ)         │                                          │
+│              │                  │                                          │
+│         24V PSU (-)  ───────────┴───────────► GND                         │
+│                                                                             │
+│  Voltage Calculation:                                                      │
+│  V_out = 24V × R2 / (R1 + R2)                                             │
+│  V_out = 24V × 10k / (100k + 10k)                                         │
+│  V_out = 24V × 10/110 = 2.18V ✓                                           │
+│                                                                             │
+│  ESP32 ADC Reading: 2.18V / 3.3V × 4095 = ~2722 counts                   │
+│  Conversion: ADC_counts × (3.3 / 4095) × 11 = Actual Voltage              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CURRENT SENSOR (ACS712-30A) CIRCUIT                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│     24V (+) ─────► [LOAD] ─────► [ACS712-30A] ─────► Motor(+)            │
+│                                         │                                  │
+│                                    [GND = 0A]                              │
+│                                         │                                  │
+│                                      VOUT ─────────► GPIO34 (ADC)         │
+│                                         │                                  │
+│                                  [100nF Cap to GND]                       │
+│                                                                             │
+│  ACS712 Specs:                                                             │
+│  - Sensitivity: 100 mV/A                                                   │
+│  - Zero Offset: 2500 mV (at 0A)                                            │
+│  - Range: 0-30A                                                            │
+│  - Output: 0-5V (maps to 0-30A)                                            │
+│                                                                             │
+│  Current Calculation:                                                      │
+│  V_out = 2.5V + (I × 100mV/A)                                              │
+│  I = (V_out - 2.5V) × 10A/V                                               │
+│                                                                             │
+│  Example:                                                                  │
+│  - 0A: V_out = 2.5V                                                        │
+│  - 15A: V_out = 2.5V + (15 × 0.1) = 4.0V                                 │
+│  - 30A: V_out = 2.5V + (30 × 0.1) = 5.5V (clipped at 3.3V max)           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       OLED 128x64 (I2C) CONNECTIONS                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  OLED ────────► ESP32                                                      │
+│  GND ─────────► GND                                                        │
+│  VCC ─────────► 3.3V                                                       │
+│  SDA ─────────► GPIO21 (D21)                                               │
+│  SCL ─────────► GPIO22 (D22)                                               │
+│                                                                             │
+│  I2C Address: 0x3C (default)                                               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         PUSH BUTTON CONNECTIONS                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  S1 (START BUTTON):                 S2 (STOP BUTTON):                     │
+│  One pin ─────► GPIO14              One pin ─────► GPIO27                 │
+│  Other pin ───► GND                 Other pin ───► GND                    │
+│                                                                             │
+│  (ESP32 has internal pull-ups)                                             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        24V POWER SUPPLY CONNECTIONS                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  24V PSU (+) connects to:                                                   │
+│  ├─ Voltage Divider (R1)                                                   │
+│  ├─ ACS712 Power input                                                     │
+│  ├─ Relay VCC pins (through voltage regulator if needed)                  │
+│  └─ Motor Load (through relays)                                            │
+│                                                                             │
+│  24V PSU (-) connects to:                                                   │
+│  ├─ Voltage Divider (R2 + Zener)                                           │
+│  ├─ ACS712 GND                                                             │
+│  ├─ Relay GND pins                                                         │
+│  ├─ Motor GND (return)                                                     │
+│  ├─ ESP32 GND (IMPORTANT - Common ground!)                                 │
+│  └─ OLED GND                                                               │
+│                                                                             │
+│  ⚠️  CRITICAL: Connect all grounds together!                               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       COMPONENT VALUES SUMMARY                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Resistors:                                                                 │
+│  ├─ R1: 100kΩ (1/4W) - Voltage divider high                               │
+│  └─ R2: 10kΩ (1/4W)  - Voltage divider low                                │
+│                                                                             │
+│  Capacitors:                                                                │
+│  └─ C1: 100nF (ceramic) - Voltage noise filter                             │
+│                                                                             │
+│  Diodes:                                                                    │
+│  └─ D1: 1N4728A (3.3V Zener 1W) - GPIO overvoltage protection            │
+│                                                                             │
+│  Sensors:                                                                   │
+│  ├─ ACS712-30A - Current sensor                                            │
+│  └─ OLED 128x64 - I2C display                                              │
+│                                                                             │
+│  Actuators:                                                                 │
+│  ├─ Relay 1 (5V coil) - Motor cutoff                                       │
+│  ├─ Relay 2 (5V coil) - Soft start                                         │
+│  └─ 2x Push Buttons - Control switches                                     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+ASSEMBLY CHECKLIST:
+  ✓ All power grounds connected together
+  ✓ Voltage divider R1 + R2 + C1 + Zener installed
+  ✓ Zener diode polarity correct (anode to GPIO35)
+  ✓ ACS712 power supply stabilized (5V)
+  ✓ Relay modules powered from 5V source
+  ✓ OLED I2C address verified (0x3C)
+  ✓ Push buttons debounced (internal pull-ups)
+  ✓ Motor load connected through relays
+  ✓ 24V supply voltage within ±5% tolerance
+  ✓ All connections soldered securely
+
+TROUBLESHOOTING:
+  Problem: OLED not showing
+  → Check I2C connections (GPIO21/SDA, GPIO22/SCL)
+  → Verify power to OLED (3.3V)
+  → Scan for 0x3C address
+
+  Problem: Voltage reading wrong
+  → Measure actual voltage at GPIO35
+  → Check divider resistor values (R1=100k, R2=10k)
+  → Verify Zener is limiting to <3.3V
+
+  Problem: Current reading incorrect
+  → Check ACS712 power (5V on VCC)
+  → Measure VOUT pin (should be ~2.5V at 0A)
+  → Verify no shorts in current path
+
+  Problem: Motor doesn't start
+  → Check relay coil voltage (5V)
+  → Verify GPIO12/GPIO13 going HIGH
+  → Test relay manually with 5V battery
+
+═══════════════════════════════════════════════════════════════════════════════
