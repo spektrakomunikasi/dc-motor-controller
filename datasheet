@@ -1,0 +1,133 @@
+Datasheet
+Smart Soft Starter Controller (ESP32 + Web Offline + RS485 Modbus RTU)
+1) Deskripsi Produk
+Smart Soft Starter Controller adalah modul kontrol soft-starter berbasis ESP32 untuk aplikasi motor/beban DC 24V.
+Perangkat menyediakan:
+
+kontrol soft-start/soft-stop,
+proteksi arus/tegangan/suhu,
+monitoring lokal via OLED,
+monitoring & konfigurasi via Web UI offline (Access Point),
+integrasi DCS/SCADA via RS485 Modbus RTU.
+Dirancang untuk aplikasi industrial termasuk pemasangan dalam enclosure/explosion-proof box dengan akses monitor jarak dekat melalui WiFi AP lokal dan RS485.
+
+2) Fitur Utama
+Soft-start bertahap: 15V → 24V (step 0.5V)
+Soft-stop terkontrol (ramp down)
+Current limiter adjustable: 1.0A – 10.0A
+Proteksi fault:
+Over Temperature
+Current Sensor Error
+Over Current
+Under Voltage Input
+Fault logging (timestamp uptime)
+Auto-retry setelah fault (enable/disable + delay + max retry)
+LED status indikator + deskripsi status di Web
+OLED realtime status lokal
+Web HMI offline (tanpa internet/CDN)
+RS485 Modbus RTU slave untuk DCS/SCADA
+3) Spesifikasi Teknis
+3.1 Kontrol & Komputasi
+MCU: ESP32
+PWM output: 25 kHz, 8-bit
+State machine:
+IDLE
+SOFT_START
+RUNNING
+SOFT_STOP
+FAULT
+3.2 Input/Output
+Digital input:
+START button
+STOP button
+KONTAKTOR input (active LOW)
+Digital output:
+Relay control
+Alarm output
+LED Green / Red / Yellow
+Analog input:
+Current sensor
+Input voltage sensing
+Output voltage sensing
+Temperature sensor:
+DS18B20 (OneWire)
+3.3 Parameter Operasi (default firmware)
+Soft-start awal: 15.0V
+Soft-start akhir: 24.0V
+Step ramp: 0.5V
+Interval step: 140 ms
+Soft-stop duration: 3000 ms
+Overcurrent delay: 300 ms
+Undervoltage delay: 500 ms
+Current limit: 1.0 – 10.0 A (default 8.0 A)
+Temperature limit: configurable (default 80°C)
+Min input voltage limit: configurable (default 18.0V)
+3.4 Komunikasi
+WiFi AP lokal
+Mode: Access Point
+SSID: SoftStarter-Config
+Password: spektra2026
+IP default: 192.168.4.1
+Web UI: single-screen, realtime numeric monitoring
+RS485 Modbus RTU
+Physical: RS485 half-duplex
+Default: 9600, 8N1
+Slave ID: 1
+Protocol: Modbus RTU slave (holding register map)
+4) RS485 Wiring (Final Valid)
+ESP32 TX2 (GPIO17) → DI (RS485 transceiver)
+ESP32 RX2 (GPIO16) ← RO (RS485 transceiver)
+ESP32 GPIO4 → RE + DE (digabung)
+Bus: A→A, B→B, common GND disarankan
+5) Indikasi LED
+LED Hijau kedip: IDLE / standby
+LED Hijau ON: RUNNING
+LED Merah kedip: FAULT aktif
+LED Kuning ON: SOFT_START / SOFT_STOP proses
+6) Fault Code
+0: Normal
+1: Over Temperature
+2: Current Sensor Error
+3: Over Current
+4: Under Voltage Input
+7) Modbus Register Ringkas (Holding Register)
+HR0: Command (1 start, 2 stop, 3 reset fault)
+HR1: State
+HR2: Fault code
+HR3: Vin x100
+HR4: Vout x100
+HR5: Current x100
+HR6: Temp x100
+HR7: PWM
+HR8: Current limit x100 (R/W)
+HR9: Temp limit x100 (R/W)
+HR10: Min Vin x100 (R/W)
+HR11: AutoRetry enable (R/W)
+HR12: AutoRetry max (R/W)
+HR13: AutoRetry delay/10ms (R/W)
+HR14: Fault count
+HR15-16: Uptime seconds (32-bit)
+8) Web API Ringkas
+GET /api/status → status realtime
+GET /api/settings → baca setting
+POST /api/settings → update setting
+POST /api/control → start/stop/reset fault
+GET /api/faultlogs → baca log fault
+POST /api/faultlogs/clear → clear log
+9) Kondisi Operasi & Instalasi (rekomendasi)
+Gunakan catu daya stabil 24VDC
+Gunakan ground reference yang baik untuk sensor analog
+Gunakan twisted pair + terminasi RS485 sesuai panjang jaringan
+Untuk enclosure kedap/ex-proof:
+pastikan manajemen termal internal memadai
+sediakan prosedur akses service yang aman
+Lakukan kalibrasi arus final setelah pengujian beban aktual
+10) Batasan
+Firmware default ditujukan untuk aplikasi 24V (sesuai scaling saat ini)
+Akurasi arus bergantung sensor, noise grounding, dan hasil kalibrasi lapangan
+Web AP dimaksudkan untuk commissioning/maintenance lokal
+11) Revisi Firmware (current release)
+Web offline single-screen (no graph)
+Fault log + auto retry
+RS485 Modbus RTU aktif
+OLED + Web + Modbus sinkron
