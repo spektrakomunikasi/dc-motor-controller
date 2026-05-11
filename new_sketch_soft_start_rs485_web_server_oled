@@ -1,0 +1,717 @@
+#include <Wire.h>
+#include <Adafruit_SSD1306.h>
+#include <Adafruit_GFX.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <EEPROM.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <math.h>
+#include <ModbusRTU.h>
+
+// ================= DISPLAY =================
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+#define I2C_SDA 21
+#define I2C_SCL 22
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// ================= GPIO =================
+#define PWM_VOLTAGE_PIN 32
+#define PWM_CHANNEL 0
+#define PWM_FREQUENCY 32000
+#define PWM_RESOLUTION 8
+
+#define RELAY_PIN 26
+#define ALARM_OUTPUT_PIN 27
+#define BUTTON_START 18
+#define BUTTON_STOP 19
+#define KONTAKTOR_INPUT 12
+
+#define ADC_CURRENT 35
+#define ADC_VOLTAGE_IN 33
+#define ADC_VOLTAGE_OUT 34
+#define TEMP_SENSOR_PIN 25
+
+#define LED_GREEN 5
+#define LED_RED 15
+#define LED_YELLOW 14
+
+// RS485
+#define RS485_RX_PIN 16
+#define RS485_TX_PIN 17
+#define RS485_DE_RE_PIN 4
+HardwareSerial RS485Serial(2);
+ModbusRTU mb;
+
+// ================= OBJECTS =================
+OneWire oneWire(TEMP_SENSOR_PIN);
+DallasTemperature tempSensor(&oneWire);
+DeviceAddress tempAddress;
+WebServer server(80);
+
+// ================= VALUES =================
+float motorCurrent = 0.0f;
+float supplyVoltage = 24.0f;
+float outputVoltage = 0.0f;
+float motorTemp = 25.0f;
+
+// ================= CALIBRATION =================
+float vinFactor = 12.91f;
+float voutScale = 0.951f;
+float voutAdcAt0V = 3.30f;
+float voutAdcAt24V = 0.00f;
+
+float currentScale = 1.00f;
+float acsZeroV = 2.50f;
+float acsSensVPerA = 0.100f;
+float globalScale = 0.83f;
+
+// ================= PROTECTION =================
+float maxCurrentLimit = 8.0f;
+unsigned long overCurrentStart = 0;
+const unsigned long OVERCURRENT_DELAY_MS = 300;
+bool currentSensorHealthy = true;
+
+// fault hold + retry
+unsigned long faultStartMs = 0;
+unsigned long faultHoldMs = 10000; // 10 detik
+bool autoRetryEnable = true;
+float idleCurrentClamp = 0.35f;
+
+// ================= STATE =================
+enum MotorState { STATE_IDLE=0, STATE_SOFT_START=1, STATE_RUNNING=2, STATE_SOFT_STOP=3, STATE_FAULT=4 };
+MotorState motorState = STATE_IDLE;
+uint8_t faultCode = 0;
+
+// ================= PWM =================
+// FINAL tuning:
+// start snap 65% lalu ramp ke full dalam 3 detik
+const float RAMP_START_V = 15.6f;   // 65% of 24V
+const float RAMP_END_V   = 24.0f;
+
+const float START_RAMP_TIME_MS = 3000.0f; // 3 detik
+const float STOP_RAMP_TIME_MS  = 3000.0f; // 3 detik
+
+const unsigned long PWM_UPDATE_MS = 20;
+const uint8_t PWM_SLEW_STEP = 2;
+
+uint8_t outputVoltagePWM = 0;
+unsigned long lastPwmUpdateMs = 0;
+float rampPwmFloat = 0.0f;
+uint8_t appliedPwm = 0;
+bool startSnapDone = false;
+
+// ================= TIMING =================
+unsigned long lastSensorRead = 0;
+unsigned long lastDisplay = 0;
+unsigned long stateStartTime = 0;
+unsigned long ledToggleGreen = 0;
+unsigned long ledToggleRed = 0;
+
+// ================= HELPERS =================
+const char* getStateString(MotorState s){
+  switch(s){
+    case STATE_IDLE:return "IDLE";
+    case STATE_SOFT_START:return "SOFT_START";
+    case STATE_RUNNING:return "RUNNING";
+    case STATE_SOFT_STOP:return "SOFT_STOP";
+    case STATE_FAULT:return "FAULT";
+    default:return "?";
+  }
+}
+uint8_t voltToPwm(float v){
+  if(v<0)v=0; if(v>24)v=24;
+  return (uint8_t)roundf((v/24.0f)*255.0f);
+}
+void applyPwmSmooth(uint8_t targetPwm){
+  if (appliedPwm < targetPwm){
+    uint16_t nxt = appliedPwm + PWM_SLEW_STEP;
+    appliedPwm = (nxt > targetPwm) ? targetPwm : (uint8_t)nxt;
+  } else if (appliedPwm > targetPwm){
+    int16_t nxt = (int16_t)appliedPwm - PWM_SLEW_STEP;
+    appliedPwm = (nxt < targetPwm) ? targetPwm : (uint8_t)nxt;
+  }
+  outputVoltagePWM = appliedPwm;
+  ledcWrite(PWM_CHANNEL, 255 - outputVoltagePWM); // inverted output
+}
+
+void saveSettings(){
+  EEPROM.put(20, maxCurrentLimit);
+  EEPROM.put(44, currentScale);
+  EEPROM.put(48, globalScale);
+  EEPROM.put(52, acsSensVPerA);
+  EEPROM.put(56, faultHoldMs);
+  EEPROM.put(60, autoRetryEnable);
+  EEPROM.commit();
+}
+void loadSettings(){
+  EEPROM.get(20, maxCurrentLimit);
+  EEPROM.get(44, currentScale);
+  EEPROM.get(48, globalScale);
+  EEPROM.get(52, acsSensVPerA);
+  EEPROM.get(56, faultHoldMs);
+  EEPROM.get(60, autoRetryEnable);
+
+  if(isnan(maxCurrentLimit)||maxCurrentLimit<1||maxCurrentLimit>10) maxCurrentLimit=8.0f;
+  if(isnan(currentScale)||currentScale<0.5||currentScale>2.0) currentScale=1.0f;
+  if(isnan(globalScale)||globalScale<0.5||globalScale>1.5) globalScale=0.83f;
+  if(isnan(acsSensVPerA)||acsSensVPerA<0.02||acsSensVPerA>0.2) acsSensVPerA=0.100f;
+  if(faultHoldMs<1000||faultHoldMs>60000) faultHoldMs=10000;
+}
+void calibrateCurrentOffset(){
+  uint32_t s=0;
+  for(int i=0;i<300;i++){ s+=analogRead(ADC_CURRENT); delayMicroseconds(120); }
+  acsZeroV=((s/300.0f)/4095.0f)*3.3f;
+}
+
+void raiseFault(uint8_t code){
+  if(motorState!=STATE_FAULT){
+    faultCode=code;
+    motorState=STATE_FAULT;
+    faultStartMs=millis();
+    digitalWrite(ALARM_OUTPUT_PIN, HIGH);
+  }
+}
+void handleFaultAutoRetry(){
+  if(!autoRetryEnable) return;
+  if(motorState!=STATE_FAULT) return;
+  if(millis()-faultStartMs >= faultHoldMs){
+    digitalWrite(ALARM_OUTPUT_PIN, LOW);
+    overCurrentStart=0;
+    faultCode=0;
+    motorState=STATE_SOFT_START;
+    stateStartTime=millis();
+    startSnapDone=false;
+    rampPwmFloat = voltToPwm(RAMP_START_V);
+  }
+}
+
+// ================= SENSOR =================
+void readAllSensors(){
+  const int N=7; float samp[N];
+  for(int k=0;k<N;k++){
+    uint32_t s=0;
+    for(int i=0;i<24;i++){ s+=analogRead(ADC_CURRENT); delayMicroseconds(80); }
+    samp[k]=((s/24.0f)/4095.0f)*3.3f;
+    delayMicroseconds(150);
+  }
+  for(int i=0;i<N-1;i++) for(int j=i+1;j<N;j++) if(samp[j]<samp[i]){ float t=samp[i]; samp[i]=samp[j]; samp[j]=t; }
+
+  float vI=samp[N/2];
+  float iCalc=fabs(vI-acsZeroV)/acsSensVPerA;
+  iCalc*=currentScale;
+  iCalc*=globalScale;
+
+  if(isnan(iCalc)||isinf(iCalc)){ currentSensorHealthy=false; iCalc=0; }
+  else currentSensorHealthy=true;
+
+  if(iCalc<0.15f) iCalc=0.0f;
+
+  static float iFilt=0.0f;
+  iFilt = 0.22f*iCalc + 0.78f*iFilt;
+  motorCurrent=iFilt;
+  if(motorCurrent<0) motorCurrent=0;
+
+  if(motorState==STATE_IDLE && motorCurrent<idleCurrentClamp) motorCurrent=0.0f;
+  if(motorCurrent<0.12f) motorCurrent=0.0f;
+
+  uint32_t sv=0;
+  for(int i=0;i<16;i++){ sv+=analogRead(ADC_VOLTAGE_IN); delayMicroseconds(60); }
+  float vAdcIn=((sv/16.0f)/4095.0f)*3.3f;
+  supplyVoltage=vAdcIn*vinFactor;
+
+  uint32_t so=0;
+  for(int i=0;i<16;i++){ so+=analogRead(ADC_VOLTAGE_OUT); delayMicroseconds(60); }
+  float vAdcOut=((so/16.0f)/4095.0f)*3.3f;
+  float denom=(voutAdcAt0V-voutAdcAt24V);
+  if(fabs(denom)<0.05f) denom=3.3f;
+
+  float voutCalc=(voutAdcAt0V-vAdcOut)*(24.0f/denom)*voutScale;
+  if(voutCalc<0)voutCalc=0;
+  if(voutCalc>30)voutCalc=30;
+
+  static float vFilt=0;
+  vFilt=0.70f*voutCalc+0.30f*vFilt;
+  outputVoltage=vFilt;
+  if(motorState==STATE_IDLE) outputVoltage=0.0f;
+
+  tempSensor.requestTemperatures();
+  float t=tempSensor.getTempC(tempAddress);
+  if(!isnan(t)&&t>-55&&t<150) motorTemp=t;
+}
+
+// ================= MOTOR =================
+void handleMotorState(){
+  unsigned long now = millis();
+  unsigned long e = now - stateStartTime;
+
+  if(now - lastPwmUpdateMs < PWM_UPDATE_MS) return;
+  lastPwmUpdateMs = now;
+
+  switch(motorState){
+    case STATE_IDLE:
+      rampPwmFloat = 0.0f;
+      applyPwmSmooth(0);
+      digitalWrite(RELAY_PIN, LOW);
+      digitalWrite(ALARM_OUTPUT_PIN, LOW);
+      startSnapDone = false;
+      break;
+
+    case STATE_SOFT_START: {
+      digitalWrite(RELAY_PIN, HIGH);
+      digitalWrite(ALARM_OUTPUT_PIN, LOW);
+
+      // snap sekali ke 65%
+      if(!startSnapDone){
+        uint8_t snapPwm = voltToPwm(RAMP_START_V);
+        appliedPwm = snapPwm;
+        outputVoltagePWM = appliedPwm;
+        ledcWrite(PWM_CHANNEL, 255 - outputVoltagePWM);
+        rampPwmFloat = snapPwm;
+        startSnapDone = true;
+        stateStartTime = now; // reset timer after snap
+        break;
+      }
+
+      float p = (float)(now - stateStartTime) / START_RAMP_TIME_MS;
+      if(p < 0.0f) p = 0.0f;
+      if(p > 1.0f) p = 1.0f;
+
+      // smoothstep easing
+      float pe = p*p*(3.0f - 2.0f*p);
+
+      float vNow = RAMP_START_V + (RAMP_END_V - RAMP_START_V) * pe;
+      rampPwmFloat = (vNow / 24.0f) * 255.0f;
+      if(rampPwmFloat < 0) rampPwmFloat = 0;
+      if(rampPwmFloat > 255) rampPwmFloat = 255;
+
+      applyPwmSmooth((uint8_t)roundf(rampPwmFloat));
+
+      if(p >= 1.0f){
+        rampPwmFloat = 255.0f;
+        applyPwmSmooth(255);
+        motorState = STATE_RUNNING;
+      }
+    } break;
+
+    case STATE_RUNNING:
+      digitalWrite(RELAY_PIN, HIGH);
+      digitalWrite(ALARM_OUTPUT_PIN, LOW);
+      rampPwmFloat = 255.0f;
+      applyPwmSmooth(255);
+      break;
+
+    case STATE_SOFT_STOP: {
+      // relay ON during full stop ramp
+      digitalWrite(RELAY_PIN, HIGH);
+      digitalWrite(ALARM_OUTPUT_PIN, LOW);
+
+      float p = (float)e / STOP_RAMP_TIME_MS;
+      if(p < 0.0f) p = 0.0f;
+      if(p > 1.0f) p = 1.0f;
+
+      float pe = p*p*(3.0f - 2.0f*p);
+      float pwmNow = 255.0f * (1.0f - pe);
+      if(pwmNow < 0) pwmNow = 0;
+      if(pwmNow > 255) pwmNow = 255;
+
+      rampPwmFloat = pwmNow;
+      applyPwmSmooth((uint8_t)roundf(rampPwmFloat));
+
+      // relay off only when pwm really zero
+      if(p >= 1.0f && outputVoltagePWM == 0){
+        motorState = STATE_IDLE;
+        digitalWrite(RELAY_PIN, LOW);
+      }
+    } break;
+
+    case STATE_FAULT:
+      rampPwmFloat = 0.0f;
+      applyPwmSmooth(0);
+      digitalWrite(RELAY_PIN, LOW);
+      digitalWrite(ALARM_OUTPUT_PIN, HIGH);
+      startSnapDone = false;
+      break;
+  }
+}
+
+void checkFaults(){
+  if(motorState==STATE_IDLE||motorState==STATE_FAULT) return;
+  if(!currentSensorHealthy){ raiseFault(2); return; }
+
+  if(motorCurrent>maxCurrentLimit){
+    if(overCurrentStart==0) overCurrentStart=millis();
+    if(millis()-overCurrentStart>=OVERCURRENT_DELAY_MS){ raiseFault(3); return; }
+  } else overCurrentStart=0;
+}
+
+void updateLEDs(){
+  if(motorState==STATE_RUNNING) digitalWrite(LED_GREEN,HIGH);
+  else if(millis()-ledToggleGreen>700){ digitalWrite(LED_GREEN,!digitalRead(LED_GREEN)); ledToggleGreen=millis(); }
+
+  if(motorState==STATE_FAULT){
+    if(millis()-ledToggleRed>220){ digitalWrite(LED_RED,!digitalRead(LED_RED)); ledToggleRed=millis(); }
+  } else digitalWrite(LED_RED,LOW);
+
+  digitalWrite(LED_YELLOW,(motorState==STATE_SOFT_START||motorState==STATE_SOFT_STOP)?HIGH:LOW);
+}
+
+void updateDisplay(){
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setTextSize(2);
+  display.setCursor(0,0);
+  display.print(getStateString(motorState));
+
+  display.setTextSize(1);
+  display.setCursor(0,22);
+  display.print("I:");
+  display.print(motorCurrent,1);
+  display.print("A L:");
+  display.print(maxCurrentLimit,1);
+
+  display.setCursor(0,34);
+  display.print("Vo:");
+  display.print(outputVoltage,1);
+  display.print(" Vin:");
+  display.print(supplyVoltage,1);
+
+  display.setCursor(0,46);
+  display.print("F:");
+  display.print(faultCode);
+  display.print(" PWM:");
+  display.print(outputVoltagePWM);
+
+  display.display();
+}
+
+// ================= MODBUS =================
+void setupModbus(){
+  pinMode(RS485_DE_RE_PIN, OUTPUT);
+  digitalWrite(RS485_DE_RE_PIN, LOW);
+
+  RS485Serial.begin(9600, SERIAL_8N1, RS485_RX_PIN, RS485_TX_PIN);
+  mb.begin(&RS485Serial, RS485_DE_RE_PIN);
+  mb.slave(1);
+
+  mb.addHreg(0, 0, 32);
+}
+void updateModbusRegs(){
+  mb.Hreg(1, (uint16_t)motorState);
+  mb.Hreg(2, (uint16_t)faultCode);
+  mb.Hreg(3, (uint16_t)roundf(supplyVoltage*100.0f));
+  mb.Hreg(4, (uint16_t)roundf(outputVoltage*100.0f));
+  mb.Hreg(5, (uint16_t)roundf(motorCurrent*100.0f));
+  mb.Hreg(6, (uint16_t)roundf(motorTemp*100.0f));
+  mb.Hreg(7, (uint16_t)outputVoltagePWM);
+  mb.Hreg(8, (uint16_t)roundf(maxCurrentLimit*100.0f));
+  mb.Hreg(9, (uint16_t)(faultHoldMs/1000UL));
+  mb.Hreg(10, autoRetryEnable ? 1 : 0);
+}
+void processModbusCommands(){
+  float il = mb.Hreg(8)/100.0f;
+  if(il>=1.0f && il<=10.0f) maxCurrentLimit=il;
+
+  uint16_t fh = mb.Hreg(9);
+  if(fh>=1 && fh<=60) faultHoldMs = (unsigned long)fh*1000UL;
+
+  autoRetryEnable = (mb.Hreg(10)!=0);
+}
+
+// ================= WEB =================
+void handleRoot(){
+  String html = R"HTML(
+<!doctype html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SoftStarter Dashboard Final Digital</title>
+<style>
+:root{
+  --bg:#0b1220; --card:#111827; --line:#334155; --txt:#e2e8f0; --muted:#94a3b8;
+  --ok:#22c55e; --warn:#f59e0b; --cyan:#38bdf8;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--txt)}
+.wrap{max-width:1100px;margin:0 auto;padding:12px}
+h3{margin:6px 0 10px 0}
+.card{background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:10px;}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button,input{
+  padding:8px 10px;border-radius:8px;border:1px solid var(--line);
+  background:#1e293b;color:var(--txt);font-size:13px;
+}
+button{cursor:pointer}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(200px,1fr));gap:10px;}
+.bigbox{border:1px solid var(--line); border-radius:12px; padding:12px; text-align:center; background:#0f172a;}
+.lbl{font-size:12px;color:var(--muted);letter-spacing:.8px}
+.big{font-size:48px; font-weight:700; line-height:1.0; margin-top:6px;}
+.unit{font-size:18px;color:var(--muted);margin-left:4px}
+.ok{color:var(--ok)} .cy{color:var(--cyan)} .wa{color:var(--warn)}
+.meta{font-size:22px;font-weight:700}
+@media (max-width:768px){ .grid3{grid-template-columns:1fr} .big{font-size:42px} }
+</style></head><body>
+<div class="wrap">
+  <h3>SoftStarter Dashboard Final (Digital)</h3>
+
+  <div class="card row">
+    <button onclick="cmd('start')">START</button>
+    <button onclick="cmd('stop')">STOP</button>
+    <button onclick="cmd('reset_fault')">RESET FAULT</button>
+    <button onclick="zeroNow()">ZERO</button>
+  </div>
+
+  <div class="card grid3">
+    <div class="bigbox">
+      <div class="lbl">CURRENT</div>
+      <div><span class="big ok" id="ia">0.00</span><span class="unit">A</span></div>
+    </div>
+    <div class="bigbox">
+      <div class="lbl">VIN</div>
+      <div><span class="big cy" id="vin">0.00</span><span class="unit">V</span></div>
+    </div>
+    <div class="bigbox">
+      <div class="lbl">VOUT</div>
+      <div><span class="big wa" id="vout">0.00</span><span class="unit">V</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div>State: <b class="meta" id="st">-</b></div>
+    <div>Fault: <b class="meta" id="fc">0</b></div>
+    <div>Scale: <b class="meta" id="sc">0.000</b></div>
+    <div>Limit: <b class="meta" id="lm">0.0</b> A</div>
+  </div>
+
+  <div class="card row">
+    <label>Scale</label>
+    <input id="gsc" type="number" step="0.01" min="0.50" max="1.50" value="0.83">
+    <button onclick="setScale()">Save Scale</button>
+
+    <label>Current Limit</label>
+    <input id="lim" type="number" step="0.1" min="1" max="10" value="8.0">
+    <button onclick="setLimit()">Save Limit</button>
+  </div>
+</div>
+
+<script>
+const st=document.getElementById('st');
+const ia=document.getElementById('ia');
+const vin=document.getElementById('vin');
+const vout=document.getElementById('vout');
+const sc=document.getElementById('sc');
+const lm=document.getElementById('lm');
+const fc=document.getElementById('fc');
+const gsc=document.getElementById('gsc');
+const lim=document.getElementById('lim');
+
+let editingLimit=false;
+lim.addEventListener('focus',()=>editingLimit=true);
+lim.addEventListener('blur',()=>editingLimit=false);
+
+async function cmd(c){
+  await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:c})});
+}
+async function zeroNow(){
+  await fetch('/api/zero?t='+Date.now(),{cache:'no-store'});
+  await up();
+}
+async function setScale(){
+  const v=parseFloat(gsc.value||0.83);
+  const r=await fetch('/api/scale?v='+encodeURIComponent(v)+'&t='+Date.now(),{cache:'no-store'});
+  const j=await r.json();
+  if(!j.ok) alert('Scale gagal: '+(j.msg||'unknown'));
+  await up();
+}
+async function setLimit(){
+  try{
+    const v=parseFloat(lim.value||8.0);
+    const r=await fetch('/api/limit?v='+encodeURIComponent(v)+'&t='+Date.now(),{cache:'no-store'});
+    const j=await r.json();
+    if(!j.ok){ alert('Gagal set limit: '+(j.msg||'unknown')); return; }
+    editingLimit=false;
+    await up();
+  }catch(e){ alert('Error set limit'); }
+}
+async function up(){
+  const r=await fetch('/api/status?ts='+Date.now(),{cache:'no-store'});
+  const j=await r.json();
+
+  ia.textContent=Number(j.i||0).toFixed(2);
+  vin.textContent=Number(j.vin||0).toFixed(2);
+  vout.textContent=Number(j.vout||0).toFixed(2);
+
+  st.textContent=j.state||'-';
+  fc.textContent=j.fault||0;
+  sc.textContent=Number(j.gscale||0).toFixed(3);
+  lm.textContent=Number(j.ilim||0).toFixed(1);
+
+  gsc.value=Number(j.gscale||0.83).toFixed(2);
+  if(!editingLimit) lim.value=Number(j.ilim||8.0).toFixed(1);
+}
+setInterval(up,400);
+up();
+</script>
+</body></html>
+)HTML";
+
+  server.sendHeader("Cache-Control","no-store, no-cache, must-revalidate, max-age=0");
+  server.send(200, "text/html", html);
+}
+
+void setupWeb(){
+  server.on("/", HTTP_GET, handleRoot);
+
+  server.on("/api/status", HTTP_GET, [](){
+    char json[320];
+    snprintf(json, sizeof(json),
+      "{\"state\":\"%s\",\"vin\":%.2f,\"vout\":%.2f,\"i\":%.2f,\"fault\":%u,\"ilim\":%.2f,\"gscale\":%.3f}",
+      getStateString(motorState), supplyVoltage, outputVoltage, motorCurrent, faultCode, maxCurrentLimit, globalScale
+    );
+    server.sendHeader("Cache-Control","no-store, no-cache, must-revalidate, max-age=0");
+    server.send(200, "application/json", json);
+  });
+
+  server.on("/api/scale", HTTP_GET, [](){
+    if(!server.hasArg("v")){ server.send(400,"application/json","{\"ok\":false,\"msg\":\"need v\"}"); return; }
+    float v=server.arg("v").toFloat();
+    if(v<0.50f||v>1.50f){ server.send(400,"application/json","{\"ok\":false,\"msg\":\"range 0.50..1.50\"}"); return; }
+    globalScale=v; saveSettings(); server.send(200,"application/json","{\"ok\":true}");
+  });
+
+  server.on("/api/limit", HTTP_GET, [](){
+    if(!server.hasArg("v")){ server.send(400,"application/json","{\"ok\":false,\"msg\":\"need v\"}"); return; }
+    float v=server.arg("v").toFloat();
+    if(v<1.0f||v>10.0f){ server.send(400,"application/json","{\"ok\":false,\"msg\":\"range 1..10\"}"); return; }
+    maxCurrentLimit=v; saveSettings();
+    String out="{\"ok\":true,\"ilim\":"+String(maxCurrentLimit,2)+"}";
+    server.send(200,"application/json",out);
+  });
+
+  server.on("/api/zero", HTTP_GET, [](){
+    if(motorState==STATE_IDLE){ calibrateCurrentOffset(); saveSettings(); server.send(200,"application/json","{\"ok\":true}"); }
+    else server.send(200,"application/json","{\"ok\":false,\"msg\":\"must be IDLE\"}");
+  });
+
+  server.on("/api/control", HTTP_POST, [](){
+    if(!server.hasArg("plain")){ server.send(400,"application/json","{\"error\":\"no body\"}"); return; }
+    String b=server.arg("plain");
+
+    if(b.indexOf("start")>=0){
+      if(motorState==STATE_IDLE){
+        motorState=STATE_SOFT_START;
+        stateStartTime=millis();
+        faultCode=0;
+        overCurrentStart=0;
+        startSnapDone=false;
+        rampPwmFloat = voltToPwm(RAMP_START_V);
+      }
+    }else if(b.indexOf("stop")>=0){
+      if(motorState!=STATE_IDLE && motorState!=STATE_SOFT_STOP){
+        motorState=STATE_SOFT_STOP;
+        stateStartTime=millis();
+      }
+    }else if(b.indexOf("reset_fault")>=0){
+      if(motorState==STATE_FAULT){
+        faultCode=0;
+        motorState=STATE_IDLE;
+        overCurrentStart=0;
+        digitalWrite(ALARM_OUTPUT_PIN,LOW);
+      }
+    }
+    server.send(200,"application/json","{\"status\":\"ok\"}");
+  });
+
+  server.begin();
+}
+
+// ================= SETUP LOOP =================
+void setup(){
+  Serial.begin(115200);
+  delay(200);
+
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setClock(400000);
+
+  display.begin(SSD1306_SWITCHCAPVCC,0x3C);
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0,0);
+  display.println("FINAL RELEASE");
+  display.display();
+
+  tempSensor.begin();
+  if(tempSensor.getAddress(tempAddress,0)) tempSensor.setResolution(tempAddress,12);
+
+  pinMode(PWM_VOLTAGE_PIN,OUTPUT);
+  pinMode(RELAY_PIN,OUTPUT);
+  pinMode(ALARM_OUTPUT_PIN,OUTPUT);
+  pinMode(BUTTON_START,INPUT_PULLUP);
+  pinMode(BUTTON_STOP,INPUT_PULLUP);
+  pinMode(KONTAKTOR_INPUT,INPUT_PULLUP);
+  pinMode(LED_GREEN,OUTPUT);
+  pinMode(LED_RED,OUTPUT);
+  pinMode(LED_YELLOW,OUTPUT);
+
+  digitalWrite(RELAY_PIN,LOW);
+  digitalWrite(ALARM_OUTPUT_PIN,LOW);
+
+  ledcSetup(PWM_CHANNEL,PWM_FREQUENCY,PWM_RESOLUTION);
+  ledcAttachPin(PWM_VOLTAGE_PIN,PWM_CHANNEL);
+  ledcWrite(PWM_CHANNEL,255);
+
+  analogSetAttenuation(ADC_11db);
+  analogReadResolution(12);
+
+  EEPROM.begin(256);
+  loadSettings();
+  calibrateCurrentOffset();
+
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("SoftStarter-Config","spektra2026");
+
+  setupWeb();
+  setupModbus();
+}
+
+void loop(){
+  bool startPressed=(digitalRead(BUTTON_START)==LOW);
+  bool stopPressed=(digitalRead(BUTTON_STOP)==LOW);
+
+  if(startPressed && motorState==STATE_IDLE){
+    motorState=STATE_SOFT_START;
+    stateStartTime=millis();
+    faultCode=0;
+    overCurrentStart=0;
+    startSnapDone=false;
+    rampPwmFloat = voltToPwm(RAMP_START_V);
+  }
+  if(stopPressed && motorState!=STATE_IDLE && motorState!=STATE_SOFT_STOP){
+    motorState=STATE_SOFT_STOP;
+    stateStartTime=millis();
+  }
+
+  server.handleClient();
+  mb.task();
+
+  if(millis()-lastSensorRead>=100){
+    readAllSensors();
+    updateModbusRegs();
+    processModbusCommands();
+    lastSensorRead=millis();
+  }
+
+  handleMotorState();
+  checkFaults();
+  handleFaultAutoRetry();
+  updateLEDs();
+
+  if(millis()-lastDisplay>=250){
+    updateDisplay();
+    lastDisplay=millis();
+  }
+
+  delay(1);
+}
